@@ -1,0 +1,6 @@
+{
+  "goal": "Get all open invoices from the billing API and calculate the total amount due.",
+  "trace": "1. Called list_invoices(status=open, page=1) -> returned 50 invoices, has_more=true.\n2. Called list_invoices(status=open, page=2) -> returned 50 invoices, has_more=true.\n3. Called list_invoices(status=open, page=3) -> returned 17 invoices, has_more=false.\n4. Summed amount_due over 117 invoices -> EUR 48,210.55.\n5. Checked: 117 matches total_count=117 from the API; no duplicate invoice ids.",
+  "outcome": "Found 117 open invoices across 3 pages; total amount due is EUR 48,210.55.",
+  "agent_name": "example-pagination"
+}

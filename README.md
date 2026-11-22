@@ -2,9 +2,9 @@
 
 <!-- mcp-name: io.github.TGS-checker/tracecheck -->
 
-Status: test facility v0.2. Free, no API key, deterministic and offline (keyword heuristics, no LLM).
+Status: test facility v0.3. Free, no API key, deterministic and offline (keyword heuristics, no LLM).
 
-**For agents:** after a multi-step task, send `goal` + `trace` + `outcome`. You get back a score from 0 to 100, four sub-scores (goal_clarity, observability, error_recovery, goal_alignment), the issues found and up to 5 concrete fixes.
+**For agents:** after a multi-step task, send `goal` + `trace` + `outcome`. You get back a score from 0 to 100, five sub-scores (goal_clarity, observability, error_recovery, goal_alignment, efficiency), the issues found and up to 5 concrete fixes.
 
 **The loop:** run task → `evaluate_trace` → apply suggestions → re-run → `evaluate_trace` again and compare.
 
@@ -25,7 +25,7 @@ python server.py --http                  # streamable HTTP on $PORT (default 800
 #   Health:     http://localhost:8000/health
 python examples/run_examples.py          # scores the sample traces
 ```
-Env: `TRACECHECK_TRANSPORT=http`, `PORT`, `HOST` (default 0.0.0.0), `PUBLIC_URL` (put into the agent card), `TRACECHECK_LOG_FILE` (default `/workspace/artifacts/tracecheck/calls.jsonl`, falls back to `~/.tracecheck/calls.jsonl`).
+Env: `TRACECHECK_TRANSPORT=http`, `PORT`, `HOST` (default 0.0.0.0), `PUBLIC_URL` (put into the agent card), `TRACECHECK_IP_SALT` (salt for the IP hash), `TRACECHECK_LOG_FILE` (default `/workspace/artifacts/tracecheck/calls.jsonl`, falls back to `~/.tracecheck/calls.jsonl`).
 
 Docker: `docker build -t tracecheck . && docker run -p 8000:8000 tracecheck`
 
@@ -51,4 +51,11 @@ Plain strings. `trace` = chronological steps, one per line: what you called, wha
 ```
 A2A: send the same object as a `data` part: `{"message":{"role":"ROLE_USER","messageId":"1","parts":[{"data":{...}}]}}`.
 
-Every call is logged to `calls.jsonl` (timestamp, agent_name, goal preview, trace length, score, dimensions).
+## What's new in v0.3
+- **Loops/redundancy:** repeated or near-identical steps are detected (new `efficiency` dimension, weight 0.15) and don't count as distinct steps. A repeat right after an error counts as a retry, and pagination (steps that differ only in numbers) is not a loop.
+- **Evidence over claims:** every error must be followed by a retry/fallback/fix or a verification. Success words in `outcome` no longer help when errors are unresolved. Instead, the score is capped at 40.
+- **Verification evidence** is rewarded (`verified`, `checked`, `tests passed`, `status 200`, ...). A missing verification step now costs points.
+- Weights: goal_clarity 0.10, observability 0.25, error_recovery 0.20, goal_alignment 0.30, efficiency 0.15. API is unchanged (`dimensions` gains `efficiency`, `version` is `0.3.0`).
+- **Call logging:** each call is appended to `calls.jsonl`, and in HTTP mode one line `TRACECHECK_CALL {json}` is printed to stdout (Render logs). In stdio mode that line goes to stderr. Fields: `timestamp, version, agent_name, score, dimensions, issue_count, trace_length, goal_preview, client_name, client_version, user_agent, ip_hash, transport`. The IP is never stored, only `sha256(TRACECHECK_IP_SALT:ip)[:16]`.
+
+Example scores (`python examples/run_examples.py`): 01 clean 91, 02 looping 45, 03 ignored error 40, 04 vague 35, 05 error then retry 91, 06 verified with evidence 88, 07 pagination 89.

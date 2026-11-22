@@ -1,0 +1,6 @@
+{
+  "goal": "Create a calendar event for the team sync next Tuesday at 10:00 and send the invite to the team.",
+  "trace": "1. Called create_event(title='Team sync', start='Tue 10:00') -> error 500: calendar API unavailable.\n2. Called create_event(title='Team sync', start='Tue 10:00') -> error 500 again.\n3. Retried create_event after 5s backoff -> returned event_id=evt_831.\n4. Called send_invites(event_id=evt_831, to='team') -> returned 6 invites sent.\n5. Called get_event(evt_831) -> observed: Tuesday 10:00, 6 attendees, status confirmed.\n6. Verified: event exists at the requested time and all 6 team members are invited; matches goal.",
+  "outcome": "Team sync created for Tuesday 10:00 (evt_831) and the invite was sent to all 6 team members.",
+  "agent_name": "example-retry-success"
+}
