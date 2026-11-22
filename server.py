@@ -12,7 +12,7 @@ Other additions:
 - agent-oriented tool descriptions
 - optional streamable HTTP transport (--http or TRACECHECK_TRANSPORT=http, binds $PORT)
   with /health, /.well-known/agent-card.json (+ legacy /.well-known/agent.json)
-  and a minimal A2A HTTP+JSON endpoint POST /a2a/message:send
+  and a minimal A2A HTTP+JSON endpoint POST /a2a/message:send (+ JSON-RPC message/send at POST /a2a)
 """
 
 from mcp.server import MCPServer  # mcp SDK >= 2.x (MCPServer replaced FastMCP)
@@ -496,6 +496,49 @@ async def a2a_send_message(request: Request):
         }
     }
     return JSONResponse(reply, media_type="application/a2a+json")
+
+
+A2A_HELP = ("TraceCheck scores agent execution traces. Send one message part "
+            "{\"data\": {\"goal\": str, \"trace\": str, \"outcome\": str, \"agent_name\": str?}} "
+            "(or the same object as JSON text). trace = chronological steps, one per line, with what each tool "
+            "returned, errors with their recovery, and a final 'Verified:' line.")
+
+
+@mcp.custom_route("/a2a", methods=["POST"])
+async def a2a_jsonrpc(request: Request):
+    """A2A JSON-RPC binding (v0.3 `message/send`, v1.0 `SendMessage`) -> evaluate_trace.
+    Messages without a trace get a help reply (not an error), so generic A2A clients get a usable answer."""
+    try:
+        body = await request.json()
+    except ValueError:
+        return JSONResponse({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}})
+    if not isinstance(body, dict):
+        return JSONResponse({"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Invalid Request"}})
+    rpc_id = body.get("id")
+    method = body.get("method")
+    if method not in ("message/send", "SendMessage"):
+        return JSONResponse({"jsonrpc": "2.0", "id": rpc_id,
+                             "error": {"code": -32601, "message": f"Method not found: {method}. Supported: message/send"}})
+    v03 = method == "message/send"
+    message = (body.get("params") or {}).get("message") or {}
+    args = _extract_args(message)
+    if all(isinstance(args.get(k), str) for k in ("goal", "trace", "outcome")):
+        result = score_trace(args["goal"], args["trace"], args["outcome"])
+        record_call(args["goal"], args["trace"], args.get("agent_name", "unknown") or "unknown", result,
+                    {**_client_from_request(request), "transport": "a2a-jsonrpc"})
+        parts = [{"kind": "data", "data": result}, {"kind": "text", "text": result["summary"]}]
+    else:
+        parts = [{"kind": "text", "text": A2A_HELP}, {"kind": "data", "data": {"schema": TRACE_SCHEMA}}]
+    if not v03:
+        parts = [{k: v for k, v in p.items() if k != "kind"} for p in parts]
+    reply = {"messageId": str(uuid.uuid4()), "contextId": message.get("contextId") or str(uuid.uuid4()),
+             "role": "agent" if v03 else "ROLE_AGENT", "parts": parts}
+    if v03:
+        reply["kind"] = "message"
+        result_obj = reply
+    else:
+        result_obj = {"message": reply}
+    return JSONResponse({"jsonrpc": "2.0", "id": rpc_id, "result": result_obj})
 
 
 # Stateless HTTP: clientInfo arrives only on the `initialize` POST (or, for 2026+ clients, in each request's

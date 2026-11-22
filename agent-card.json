@@ -12,6 +12,11 @@
       "url": "https://tracecheck-mcp.onrender.com/a2a",
       "protocolBinding": "HTTP+JSON",
       "protocolVersion": "1.0"
+    },
+    {
+      "url": "https://tracecheck-mcp.onrender.com/a2a",
+      "protocolBinding": "JSONRPC",
+      "protocolVersion": "0.3"
     }
   ],
   "capabilities": {
@@ -19,21 +24,38 @@
     "pushNotifications": false,
     "extendedAgentCard": false
   },
-  "defaultInputModes": ["application/json", "text/plain"],
-  "defaultOutputModes": ["application/json"],
+  "defaultInputModes": [
+    "application/json",
+    "text/plain"
+  ],
+  "defaultOutputModes": [
+    "application/json"
+  ],
   "skills": [
     {
       "id": "evaluate_trace",
       "name": "Evaluate agent execution trace",
       "description": "Score an agent's multi-step execution trace for reliability and return concrete improvement suggestions. Send POST /a2a/message:send with one message part {\"data\": {\"goal\": str, \"trace\": str, \"outcome\": str, \"agent_name\": str (optional)}}. trace = chronological steps, one per line, including what each tool returned, errors with their recovery, and a final 'Verified:' line. Returns a Message whose data part is {score, dimensions, issues, suggestions, summary, version}. Loop: run task, evaluate, apply suggestions, re-run, compare.",
-      "tags": ["evaluation", "agent-improvement", "verification", "self-improvement", "trace", "reliability"],
+      "tags": [
+        "evaluation",
+        "agent-improvement",
+        "verification",
+        "self-improvement",
+        "trace",
+        "reliability"
+      ],
       "examples": [
         "Evaluate this trace for the goal 'book a flight and confirm the reservation'.",
         "Check if my multi-step research process completed correctly and suggest improvements.",
         "{\"goal\": \"Find the cheapest direct flight AMS->LIS on 12 March and report price and flight number\", \"trace\": \"1. Called search_flights(...)\\n2. Observed: returned 4 flights...\\n3. Verified: matches goal\", \"outcome\": \"KL1693, EUR 89\"}"
       ],
-      "inputModes": ["application/json", "text/plain"],
-      "outputModes": ["application/json"]
+      "inputModes": [
+        "application/json",
+        "text/plain"
+      ],
+      "outputModes": [
+        "application/json"
+      ]
     }
   ]
 }
