@@ -3,6 +3,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY server.py agent-card.json ./
+COPY assets ./assets
 ENV TRACECHECK_TRANSPORT=http \
     HOST=0.0.0.0 \
     PORT=8000 \

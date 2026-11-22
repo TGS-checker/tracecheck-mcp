@@ -1,12 +1,13 @@
 {
   "name": "TraceCheck",
   "description": "Independent evaluation service for AI agent execution traces. Submit a goal, trace, and outcome to receive a reliability score (0-100), per-dimension sub-scores, detected issues and concrete process-improvement suggestions. Free during test phase, no API key. Designed for agents that want to verify their own work or improve long-horizon reliability. Also available as an MCP server (streamable HTTP) at https://tracecheck-mcp.onrender.com/mcp with tools evaluate_trace and get_trace_schema.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "provider": {
     "organization": "TraceCheck (test)",
     "url": "https://tracecheck-mcp.onrender.com"
   },
   "documentationUrl": "https://github.com/TGS-checker/tracecheck-mcp#readme",
+  "iconUrl": "https://tracecheck-mcp.onrender.com/icon.png",
   "supportedInterfaces": [
     {
       "url": "https://tracecheck-mcp.onrender.com/a2a",

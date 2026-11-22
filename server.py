@@ -3,6 +3,8 @@ TraceCheck MCP Server
 A minimal agent-first service for independent evaluation of agent execution traces.
 Helps agents improve their own processes by providing objective feedback.
 
+v0.3.1: tool titles + annotations (read-only, idempotent), per-argument schema descriptions, icons,
+websiteUrl, GET / description, /icon.png + /icon.svg. Scoring unchanged from v0.3.0.
 v0.3: evaluator adds loop/redundancy detection (efficiency dimension), per-error recovery check,
 "evidence over claims" for success words, critical-flaw score caps, and richer call logging
 (client name/version, user-agent, hashed IP, stdout TRACECHECK_CALL lines). v0.2 base: original/server.py.
@@ -24,8 +26,12 @@ import os
 import re
 import sys
 import uuid
+from typing import Annotated
 from datetime import datetime, timezone
 from pathlib import Path
+
+from mcp.types import Icon, ToolAnnotations
+from pydantic import Field
 
 # Simple file logging for the test phase (path overridable via env)
 LOG_FILE = Path(os.environ.get("TRACECHECK_LOG_FILE", "/workspace/artifacts/tracecheck/calls.jsonl"))
@@ -35,15 +41,28 @@ except OSError:  # e.g. installed via uvx/pip on a machine without /workspace
     LOG_FILE = Path.home() / ".tracecheck" / "calls.jsonl"
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 # stdout carries JSON-RPC in stdio mode, so call lines go to stdout only in HTTP mode (set in main()).
 _CALL_STREAM = sys.stderr
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("tracecheck")
 
+REPO_URL = "https://github.com/TGS-checker/tracecheck-mcp"
+LIVE_URL = "https://tracecheck-mcp.onrender.com"
+_ICON_RAW = "https://raw.githubusercontent.com/TGS-checker/tracecheck-mcp/main/assets"
+ICONS = [
+    Icon(src=f"{_ICON_RAW}/icon.png", mime_type="image/png", sizes=["256x256"]),
+    Icon(src=f"{_ICON_RAW}/icon.svg", mime_type="image/svg+xml", sizes=["any"]),
+]
+# Read-only, deterministic, offline scoring: safe for agents to call freely.
+_READ_ONLY = dict(read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False)
+
 mcp = MCPServer(
     "TraceCheck",
+    title="TraceCheck",
+    website_url=REPO_URL,
+    icons=ICONS,
     instructions=(
         "Independent evaluation service for AI agent execution traces. "
         "Submit a goal, the step-by-step trace of what the agent did, and the claimed outcome. "
@@ -103,6 +122,9 @@ TRACE_SCHEMA = {
 
 
 @mcp.tool(
+    title="Get TraceCheck input schema",
+    annotations=ToolAnnotations(title="Get TraceCheck input schema", **_READ_ONLY),
+    icons=ICONS,
     description=(
         "Return the exact input format TraceCheck's evaluate_trace expects, the scored dimensions and weights, "
         "and a complete example call you can copy. Call this once before your first evaluate_trace. No arguments, no side effects."
@@ -237,12 +259,27 @@ def _client_from_request(request) -> dict:
     return out
 
 
-@mcp.tool(description=EVALUATE_TRACE_DESCRIPTION)
+@mcp.tool(
+    title="Evaluate agent execution trace",
+    annotations=ToolAnnotations(title="Evaluate agent execution trace", **_READ_ONLY),
+    icons=ICONS,
+    description=EVALUATE_TRACE_DESCRIPTION,
+)
 def evaluate_trace(
-    goal: str,
-    trace: str,
-    outcome: str,
-    agent_name: str = "unknown",
+    goal: Annotated[str, Field(description=(
+        "The original task, stated specifically, including what success looks like "
+        "(e.g. 'Find the cheapest direct AMS->LIS flight on 12 March and report price and flight number'). "
+        "Goals under 20 characters are penalised."))],
+    trace: Annotated[str, Field(description=(
+        "Your chronological steps, one per line (numbered). For each tool call write what you called and what it "
+        "returned/what you observed ('Observed: ...', '-> returned ...'). Record every error AND the retry/fallback "
+        "you used. End with a 'Verified: ...' line that checks the outcome against the goal."))],
+    outcome: Annotated[str, Field(description=(
+        "The concrete final result you claim (at least 15 characters) and how it satisfies the goal. "
+        "Back success claims with evidence (IDs, values, 'tests passed', 'status 200')."))],
+    agent_name: Annotated[str, Field(description=(
+        "Optional identifier for yourself or your agent (e.g. 'my-travel-agent'). Used for logging and "
+        "usage counts only; it does not affect the score."))] = "unknown",
     ctx: Context | None = None,
 ) -> dict:
     """MCP tool wrapper: score the trace, then log the call with client info."""
@@ -448,6 +485,49 @@ async def agent_card_legacy(request: Request):
 @mcp.custom_route("/health", methods=["GET"])
 async def health(request: Request):
     return JSONResponse({"status": "ok", "service": "tracecheck", "version": VERSION})
+
+
+ASSETS_DIR = Path(__file__).with_name("assets")
+
+
+async def _asset(name: str, media_type: str):
+    from starlette.responses import Response
+    f = ASSETS_DIR / name
+    if not f.is_file():
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return Response(f.read_bytes(), media_type=media_type, headers={"Cache-Control": "public, max-age=86400"})
+
+
+@mcp.custom_route("/icon.png", methods=["GET"])
+async def icon_png(request: Request):
+    return await _asset("icon.png", "image/png")
+
+
+@mcp.custom_route("/icon.svg", methods=["GET"])
+async def icon_svg(request: Request):
+    return await _asset("icon.svg", "image/svg+xml")
+
+
+@mcp.custom_route("/", methods=["GET"])
+async def root(request: Request):
+    base = _public_base(request)
+    return JSONResponse({
+        "name": "TraceCheck",
+        "version": VERSION,
+        "description": "Scores an AI agent's execution trace (goal, steps, outcome) 0-100 for reliability and returns "
+                       "the issues found plus concrete fixes. Deterministic, offline heuristics. Free, no API key.",
+        "tools": ["evaluate_trace", "get_trace_schema"],
+        "links": {
+            "mcp": f"{base}/mcp",
+            "a2a_agent_card": f"{base}/.well-known/agent-card.json",
+            "a2a": f"{base}/a2a",
+            "health": f"{base}/health",
+            "icon": f"{base}/icon.png",
+            "source": REPO_URL,
+            "docs": f"{REPO_URL}#readme",
+            "registry_name": "io.github.TGS-checker/tracecheck",
+        },
+    })
 
 
 def _extract_args(message: dict) -> dict:

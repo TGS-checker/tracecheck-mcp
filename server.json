@@ -7,7 +7,24 @@
     "url": "https://github.com/TGS-checker/tracecheck-mcp",
     "source": "github"
   },
-  "version": "0.3.0",
+  "websiteUrl": "https://github.com/TGS-checker/tracecheck-mcp",
+  "version": "0.3.1",
+  "icons": [
+    {
+      "src": "https://raw.githubusercontent.com/TGS-checker/tracecheck-mcp/main/assets/icon.png",
+      "mimeType": "image/png",
+      "sizes": [
+        "256x256"
+      ]
+    },
+    {
+      "src": "https://raw.githubusercontent.com/TGS-checker/tracecheck-mcp/main/assets/icon.svg",
+      "mimeType": "image/svg+xml",
+      "sizes": [
+        "any"
+      ]
+    }
+  ],
   "remotes": [
     {
       "type": "streamable-http",
