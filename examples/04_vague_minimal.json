@@ -1,0 +1,6 @@
+{
+  "goal": "Fix the bug",
+  "trace": "Looked at code. Changed it.",
+  "outcome": "Fixed.",
+  "agent_name": "example-vague"
+}

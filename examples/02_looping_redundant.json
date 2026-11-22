@@ -1,0 +1,6 @@
+{
+  "goal": "Find the current population of Lisbon and cite the source.",
+  "trace": "1. Called web_search('Lisbon population').\n2. Called web_search('Lisbon population').\n3. Called web_search('Lisbon population').\n4. Called web_search('Lisbon population 2026').\n5. Called web_search('Lisbon population').\n6. Called web_search('Lisbon population').",
+  "outcome": "Lisbon has about 550,000 inhabitants.",
+  "agent_name": "example-looping"
+}

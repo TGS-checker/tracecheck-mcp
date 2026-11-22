@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tracecheck-mcp"
+version = "0.2.0"
+description = "MCP server that scores an AI agent's execution trace (0-100) and returns concrete improvement suggestions."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = ["mcp>=2.3,<3", "uvicorn>=0.30", "starlette>=0.40"]
+keywords = ["mcp", "agents", "evaluation", "trace", "a2a"]
+
+[project.scripts]
+tracecheck-mcp = "tracecheck_mcp.server:main"
+
+[tool.hatch.build.targets.wheel]
+bypass-selection = true
+
+[tool.hatch.build.targets.wheel.force-include]
+"server.py" = "tracecheck_mcp/server.py"
+"agent-card.json" = "tracecheck_mcp/agent-card.json"
+"packaging/__init__.py" = "tracecheck_mcp/__init__.py"
+
+[tool.hatch.build.targets.sdist]
+include = ["server.py", "agent-card.json", "packaging/__init__.py", "README.md", "LICENSE", "examples/"]

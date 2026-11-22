@@ -1,0 +1,10 @@
+# Render Blueprint: free Docker web service. MCP at /mcp, agent card at /.well-known/agent-card.json
+services:
+  - type: web
+    name: tracecheck
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: PUBLIC_URL
+        value: https://tracecheck.onrender.com   # change to the URL Render assigns

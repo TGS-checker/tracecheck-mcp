@@ -1,0 +1,17 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.TGS-checker/tracecheck",
+  "title": "TraceCheck",
+  "description": "Scores an AI agent's execution trace 0-100 and returns concrete fixes. Free, no API key.",
+  "repository": {
+    "url": "https://github.com/TGS-checker/tracecheck-mcp",
+    "source": "github"
+  },
+  "version": "0.2.0",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://tracecheck.onrender.com/mcp"
+    }
+  ]
+}

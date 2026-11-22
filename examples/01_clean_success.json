@@ -1,0 +1,6 @@
+{
+  "goal": "Find the cheapest direct flight from Amsterdam to Lisbon on 12 March and report the price and flight number.",
+  "trace": "1. Called search_flights(from=AMS, to=LIS, date=2027-03-12, direct=true).\n2. Observed: returned 4 direct flights; cheapest is KL1693 at EUR 89.\n3. Called get_fare_details(KL1693) -> error: timeout after 10s.\n4. Retried get_fare_details(KL1693) with a 30s timeout -> returned EUR 89 incl. taxes, 1 seat left.\n5. Compared against the other 3 results: TP1661 EUR 104, KL1695 EUR 121, TP1663 EUR 140.\n6. Verified: KL1693 is direct, on 12 March, and the cheapest of the 4 results; matches goal.",
+  "outcome": "Cheapest direct flight found: KL1693 Amsterdam to Lisbon on 12 March, EUR 89 including taxes (1 seat left).",
+  "agent_name": "example-clean"
+}
