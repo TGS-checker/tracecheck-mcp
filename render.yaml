@@ -7,4 +7,4 @@ services:
     healthCheckPath: /health
     envVars:
       - key: PUBLIC_URL
-        value: https://tracecheck.onrender.com   # change to the URL Render assigns
+        value: https://tracecheck-mcp.onrender.com   # change to the URL Render assigns

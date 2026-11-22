@@ -32,7 +32,7 @@ Docker: `docker build -t tracecheck . && docker run -p 8000:8000 tracecheck`
 ## MCP client config
 Remote (once hosted):
 ```json
-{ "mcpServers": { "tracecheck": { "type": "streamable-http", "url": "https://tracecheck.onrender.com/mcp" } } }
+{ "mcpServers": { "tracecheck": { "type": "streamable-http", "url": "https://tracecheck-mcp.onrender.com/mcp" } } }
 ```
 Local stdio:
 ```json

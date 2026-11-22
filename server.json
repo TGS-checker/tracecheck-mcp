@@ -11,7 +11,7 @@
   "remotes": [
     {
       "type": "streamable-http",
-      "url": "https://tracecheck.onrender.com/mcp"
+      "url": "https://tracecheck-mcp.onrender.com/mcp"
     }
   ]
 }
