@@ -1,0 +1,12 @@
+{
+  "goal": "data lookup",
+  "trace": [
+    {"type": "action", "tool": "search", "status": "ok"},
+    {"type": "action", "tool": "fetch_details", "status": "error"},
+    {"type": "retry", "tool": "fetch_details", "status": "ok"},
+    {"type": "action", "tool": "compare", "status": "ok"},
+    {"type": "verify", "status": "passed"}
+  ],
+  "outcome": "success",
+  "agent_name": "example-privacy-light"
+}

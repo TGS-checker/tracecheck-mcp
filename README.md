@@ -7,7 +7,9 @@
 [![Live](https://img.shields.io/badge/live-tracecheck--mcp.onrender.com-brightgreen)](https://tracecheck-mcp.onrender.com/health)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow)](LICENSE)
 
-**TraceCheck is a free, hosted evaluator that scores an agent's execution trace (goal + steps + outcome) from 0 to 100 and returns the issues found and concrete fixes.** No API key, deterministic (no LLM), v0.3.
+**TraceCheck is a free, hosted evaluator that scores an agent's execution trace (goal + steps + outcome) from 0 to 100 and returns the issues found and concrete fixes.** No API key, deterministic (no LLM), v0.4.
+
+**No content needed: send step types only.** TraceCheck scores the *structure* of a run (actions, errors, retries, verification, repetition), so you can send `"action:search ok > error > retry > verify passed"` with goal `"data lookup"` and outcome `"success"`. Nothing you send is logged or stored: no goal, trace or outcome text, only the score and counts (see [Privacy](#privacy-what-is-logged)).
 
 - MCP (streamable HTTP): `https://tracecheck-mcp.onrender.com/mcp`, tools `evaluate_trace`, `get_trace_schema`
 - A2A: agent card at `https://tracecheck-mcp.onrender.com/.well-known/agent-card.json`, `POST /a2a/message:send` (HTTP+JSON) or JSON-RPC `message/send` at `POST /a2a`
@@ -52,7 +54,7 @@ curl -s -X POST https://tracecheck-mcp.onrender.com/a2a/message:send -H 'Content
 ## Tools
 | Tool | Purpose |
 |---|---|
-| `evaluate_trace(goal, trace, outcome, agent_name?)` | Scores the trace. Returns `{score, dimensions, issues, suggestions, summary, version}` |
+| `evaluate_trace(goal, trace, outcome, agent_name?)` | Scores the trace (free text, or step types only). Returns `{score, dimensions, issues, suggestions, summary, privacy_mode, version}` |
 | `get_trace_schema()` | Returns the input format, dimension weights and a copyable example |
 
 ## Quickstart
@@ -87,6 +89,36 @@ Plain strings. `trace` = chronological steps, one per line: what you called, wha
 ```
 A2A: send the same object as a `data` part: `{"message":{"role":"ROLE_USER","messageId":"1","parts":[{"data":{...}}]}}`.
 
+### Privacy-light format (no content needed: send step types only)
+If your trace contains user data, send only step types and statuses. `goal` can be a generic category, `outcome` a status.
+```json
+{
+  "goal": "data lookup",
+  "trace": [
+    {"type": "action", "tool": "search", "status": "ok"},
+    {"type": "action", "tool": "fetch_details", "status": "error"},
+    {"type": "retry", "tool": "fetch_details", "status": "ok"},
+    {"type": "verify", "status": "passed"}
+  ],
+  "outcome": "success",
+  "agent_name": "my-agent"
+}
+```
+Compact string form of the same trace: `"action:search ok > action:fetch_details error > retry:fetch_details ok > verify passed"` (segments `type[:tool] [status]`, separated by `>` or newlines).
+- Types: `action`, `observe`, `error`, `retry`, `fallback`, `verify`. Statuses: `ok`, `partial`, `empty`, `error`/`failed`/`timeout`, `passed`/`failed` (verify).
+- Scoring uses the same five dimensions: repeated calls of the same tool after a successful result are a loop (use status `partial` for paged results), every error needs a later `retry`/`fallback`, a successful call of the same tool or a passed `verify`, and claiming `success` over unresolved errors is capped at 40.
+- Tool names are only used inside the scoring of that call. They are not logged. Use generic names if you prefer.
+- The response includes `"privacy_mode": true` when this format was detected.
+
+## Privacy: what is logged
+Since v0.4 TraceCheck stores **no content**: no goal, trace or outcome text, and no tool names. Each call writes one line (to `calls.jsonl` and, in HTTP mode, `TRACECHECK_CALL {json}` to stdout / Render logs) with only:
+`timestamp, version, agent_name, score, dimensions, issue_count, trace_length` (characters, or number of steps), `privacy_mode, client_name, client_version, transport, user_agent, ip_hash`.
+`agent_name` is whatever you choose to send (optional). The IP is never stored, only `sha256(TRACECHECK_IP_SALT:ip)[:16]`. Scoring is deterministic and offline: your input is not sent anywhere else.
+
+## What's new in v0.4 (privacy release)
+- **Content-free logging:** `goal_preview` is gone; no goal/trace/outcome text is logged. New log field `privacy_mode`.
+- **Privacy-light trace format:** `trace` may be a list of `{type, tool?, status?}` steps or a compact string (`action:search ok > error > retry > verify passed`), with a generic goal category and an outcome status. Free-text traces score exactly as in v0.3.1.
+
 ## What's new in v0.3.1
 - Every tool argument now has a description in the input schema, and both tools carry a title and annotations (`readOnlyHint: true`, `destructiveHint: false`, `idempotentHint: true`, `openWorldHint: false`). Scores are unchanged.
 - Icon (`assets/icon.svg`, `assets/icon.png`, also served at `/icon.svg` and `/icon.png`), `websiteUrl` and `icons` in `server.json`, `iconUrl` in the agent card, and `GET /` returns a short JSON description with links.
@@ -96,6 +128,6 @@ A2A: send the same object as a `data` part: `{"message":{"role":"ROLE_USER","mes
 - **Evidence over claims:** every error must be followed by a retry/fallback/fix or a verification. Success words in `outcome` no longer help when errors are unresolved. Instead, the score is capped at 40.
 - **Verification evidence** is rewarded (`verified`, `checked`, `tests passed`, `status 200`, ...). A missing verification step now costs points.
 - Weights: goal_clarity 0.10, observability 0.25, error_recovery 0.20, goal_alignment 0.30, efficiency 0.15. API is unchanged (`dimensions` gains `efficiency`, `version` is `0.3.0`).
-- **Call logging:** each call is appended to `calls.jsonl`, and in HTTP mode one line `TRACECHECK_CALL {json}` is printed to stdout (Render logs). In stdio mode that line goes to stderr. Fields: `timestamp, version, agent_name, score, dimensions, issue_count, trace_length, goal_preview, client_name, client_version, user_agent, ip_hash, transport`. The IP is never stored, only `sha256(TRACECHECK_IP_SALT:ip)[:16]`.
+- **Call logging:** each call is appended to `calls.jsonl`, and in HTTP mode one line `TRACECHECK_CALL {json}` is printed to stdout (Render logs). In stdio mode that line goes to stderr. (v0.4: these lines no longer contain any goal text; see [Privacy](#privacy-what-is-logged).)
 
-Example scores (`python examples/run_examples.py`): 01 clean 91, 02 looping 45, 03 ignored error 40, 04 vague 35, 05 error then retry 91, 06 verified with evidence 88, 07 pagination 89.
+Example scores (`python examples/run_examples.py`): 01 clean 91, 02 looping 45, 03 ignored error 40, 04 vague 35, 05 error then retry 91, 06 verified with evidence 88, 07 pagination 89, 08 privacy-light steps 91.

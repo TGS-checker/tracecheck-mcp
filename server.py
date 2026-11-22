@@ -3,6 +3,9 @@ TraceCheck MCP Server
 A minimal agent-first service for independent evaluation of agent execution traces.
 Helps agents improve their own processes by providing objective feedback.
 
+v0.4.0 (privacy release): content-free logging (no goal/trace/outcome text is stored, only scores and
+counts) and a privacy-light trace format: send step types + statuses only (list of {"type","tool","status"}
+or 'action:search ok > error > retry > verify passed'), scored by score_steps(). Free-text path unchanged.
 v0.3.1: tool titles + annotations (read-only, idempotent), per-argument schema descriptions, icons,
 websiteUrl, GET / description, /icon.png + /icon.svg. Scoring unchanged from v0.3.0.
 v0.3: evaluator adds loop/redundancy detection (efficiency dimension), per-error recovery check,
@@ -41,7 +44,7 @@ except OSError:  # e.g. installed via uvx/pip on a machine without /workspace
     LOG_FILE = Path.home() / ".tracecheck" / "calls.jsonl"
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-VERSION = "0.3.1"
+VERSION = "0.4.0"
 # stdout carries JSON-RPC in stdio mode, so call lines go to stdout only in HTTP mode (set in main()).
 _CALL_STREAM = sys.stderr
 
@@ -68,7 +71,8 @@ mcp = MCPServer(
         "Submit a goal, the step-by-step trace of what the agent did, and the claimed outcome. "
         "Receive a reliability score (0-100), detected issues, and concrete improvement suggestions. "
         "Use this to improve your own process, recover from failures, or validate long-horizon work. "
-        "Free during the initial test phase."
+        "No content needed: send step types only (privacy-light format, e.g. 'action:search ok > error > retry > verify passed'). "
+        "No goal/trace/outcome text is ever logged or stored. Free during the initial test phase."
     ),
     version=VERSION,
 )
@@ -77,9 +81,11 @@ mcp = MCPServer(
 EVALUATE_TRACE_DESCRIPTION = """\
 Get an independent, deterministic reliability check of a multi-step task you (an agent) just ran. Returns a 0-100 score, the issues found, and concrete fixes to apply on your next attempt.
 
+No content needed: send step types only. PRIVACY-LIGHT FORMAT (recommended when your trace holds user data): goal = a generic category (e.g. "data lookup"), outcome = a status ("success", "partial", "failed"), trace = step types + statuses only, either a list [{"type":"action","tool":"search","status":"ok"}, {"type":"error"}, {"type":"retry"}, {"type":"verify","status":"passed"}] or a compact string "action:search ok > error > retry > verify passed". Step types: action, observe, error, retry, fallback, verify. Use status "partial" for a paged/incomplete result you will continue (not a loop). TraceCheck never logs or stores goal, trace or outcome text, only the score and counts.
+
 WHEN TO CALL: after you finish (or give up on) a multi-step task that used tools, before you report "done" to the user, or after a failure you want to learn from. Free, no API key, fast and offline (keyword heuristics, no LLM). Call get_trace_schema first if unsure of the format.
 
-INPUT (all plain strings):
+INPUT (free-text format, plain strings):
 - goal: the original task, stated specifically (what success looks like). Vague goals under 20 chars are penalised.
 - trace: your chronological steps, one per line, e.g. "1. Called search_flights(AMS->LIS) -> returned 3 results" / "2. Observed: ..." . Write what each tool RETURNED ("observed", "returned", "result:"), any error and the retry/fallback you used, and a final "Verified: ..." line.
 - outcome: the concrete final result you claim, and how it meets the goal.
@@ -97,6 +103,23 @@ TRACE_SCHEMA = {
         "trace": "string, required. Chronological steps, one per line (numbered). For each tool call: what you called and what it returned/what you observed. Record errors AND the recovery (retry/fallback/alternative). End with a 'Verified: ...' line that checks the outcome against the goal.",
         "outcome": "string, required. The concrete result you claim (>= 15 chars) and how it satisfies the goal.",
         "agent_name": "string, optional. Your identifier, used for logging only.",
+    },
+    "privacy_light_format": {
+        "note": "No content needed: send step types only. Nothing you send is logged or stored (only score + counts).",
+        "goal": "a generic category, e.g. 'data lookup', 'booking', 'code change'",
+        "trace": "list of steps {type, tool?, status?} OR compact string 'type[:tool] [status] > ...'. "
+                 "Types: action, observe, error, retry, fallback, verify. Statuses: ok, partial, empty, error/failed, passed.",
+        "outcome": "a status: 'success', 'partial' or 'failed' (optionally a category)",
+        "example_call": {
+            "goal": "data lookup",
+            "trace": [{"type": "action", "tool": "search", "status": "ok"},
+                      {"type": "action", "tool": "fetch_details", "status": "error"},
+                      {"type": "retry", "tool": "fetch_details", "status": "ok"},
+                      {"type": "verify", "status": "passed"}],
+            "outcome": "success",
+            "agent_name": "my-agent",
+        },
+        "example_compact_trace": "action:search ok > action:fetch_details error > retry:fetch_details ok > verify passed",
     },
     "scored_dimensions": {
         "goal_clarity": "weight 0.10 - is the goal specific and action-oriented",
@@ -269,14 +292,16 @@ def evaluate_trace(
     goal: Annotated[str, Field(description=(
         "The original task, stated specifically, including what success looks like "
         "(e.g. 'Find the cheapest direct AMS->LIS flight on 12 March and report price and flight number'). "
-        "Goals under 20 characters are penalised."))],
-    trace: Annotated[str, Field(description=(
-        "Your chronological steps, one per line (numbered). For each tool call write what you called and what it "
-        "returned/what you observed ('Observed: ...', '-> returned ...'). Record every error AND the retry/fallback "
-        "you used. End with a 'Verified: ...' line that checks the outcome against the goal."))],
+        "With a privacy-light trace a generic category is enough (e.g. 'data lookup'). Never logged or stored."))],
+    trace: Annotated[str | list[dict], Field(description=(
+        "No content needed: send step types only. Either (a) privacy-light: a list of steps like "
+        "{'type':'action','tool':'search','status':'ok'}, {'type':'error'}, {'type':'retry'}, {'type':'verify','status':'passed'} "
+        "or the compact string 'action:search ok > error > retry > verify passed'; or (b) free text: chronological "
+        "steps, one per line, with what each tool returned, every error AND the retry/fallback, and a final "
+        "'Verified: ...' line. Never logged or stored."))],
     outcome: Annotated[str, Field(description=(
-        "The concrete final result you claim (at least 15 characters) and how it satisfies the goal. "
-        "Back success claims with evidence (IDs, values, 'tests passed', 'status 200')."))],
+        "The concrete final result you claim and how it satisfies the goal; back success claims with evidence. "
+        "With a privacy-light trace just send a status: 'success', 'partial' or 'failed'. Never logged or stored."))],
     agent_name: Annotated[str, Field(description=(
         "Optional identifier for yourself or your agent (e.g. 'my-travel-agent'). Used for logging and "
         "usage counts only; it does not affect the score."))] = "unknown",
@@ -284,11 +309,193 @@ def evaluate_trace(
 ) -> dict:
     """MCP tool wrapper: score the trace, then log the call with client info."""
     result = score_trace(goal, trace, outcome)
-    record_call(goal, trace, agent_name, result, _client_from_ctx(ctx))
+    record_call(trace, agent_name, result, _client_from_ctx(ctx))
     return result
 
 
-def score_trace(goal: str, trace: str, outcome: str) -> dict:
+# --- v0.4 privacy-light format: step types + statuses only --------------------
+_STEP_TYPES = {
+    "action": "action", "call": "action", "tool": "action", "act": "action",
+    "observe": "observe", "observation": "observe", "result": "observe",
+    "error": "error", "fail": "error", "failed": "error", "failure": "error", "exception": "error",
+    "retry": "retry", "fallback": "fallback", "alternative": "fallback", "fix": "fallback",
+    "verify": "verify", "verification": "verify", "check": "verify", "test": "verify", "validate": "verify",
+}
+_ERROR_STATUSES = {"error", "failed", "fail", "failure", "timeout", "exception", "denied", "invalid", "notfound",
+                   "not_found", "4xx", "5xx", "500", "404", "crash"}
+_PASS_STATUSES = {"passed", "pass", "ok", "success", "true", "matched", "match", "200"}
+_CONTINUE_STATUSES = {"partial", "more", "has_more", "next", "paged", "continue"}
+_COMPACT_SEG = re.compile(r"^(?:\d+\s*[.)]\s*)?([a-z_]+)(?::([\w.\-/]+))?(?:\s*[:=]?\s*([\w\-]+))?$")
+
+
+def _parse_steps(trace) -> list | None:
+    """Return a list of {type, tool, status} if `trace` is in the privacy-light format, else None."""
+    if isinstance(trace, str):
+        t = trace.strip()
+        if t.startswith("["):
+            try:
+                trace = json.loads(t)
+            except ValueError:
+                return None
+        else:
+            segs = [x for x in re.split(r"\s*(?:->|=>|>|\n|;|\|)\s*", t.lower()) if x.strip()]
+            steps = []
+            for seg in segs:
+                m = _COMPACT_SEG.match(seg.strip())
+                if not m or m.group(1) not in _STEP_TYPES:
+                    return None
+                steps.append({"type": m.group(1), "tool": m.group(2), "status": m.group(3)})
+            trace = steps
+    if not isinstance(trace, list) or not trace:
+        return None
+    out = []
+    for st in trace:
+        if isinstance(st, str):
+            sub = _parse_steps(st)
+            if not sub:
+                return None
+            out.extend(sub)
+            continue
+        if not isinstance(st, dict):
+            return None
+        typ = _STEP_TYPES.get(str(st.get("type", "")).strip().lower())
+        if typ is None:
+            return None
+        tool = st.get("tool") or st.get("name")
+        status = st.get("status")
+        out.append({"type": typ, "tool": str(tool).strip().lower()[:60] if tool else None,
+                    "status": str(status).strip().lower().replace(" ", "_")[:30] if status is not None else None})
+    return out
+
+
+def _is_error_step(st: dict) -> bool:
+    return st["type"] == "error" or (st["status"] in _ERROR_STATUSES)
+
+
+def score_steps(goal: str, steps: list, outcome: str) -> dict:
+    """Score a privacy-light trace (step types + statuses only). Same dimensions/weights/caps as score_trace."""
+    issues, suggestions, dimensions, caps = [], [], {}, []
+    goal_l, outcome_l = (goal or "").lower().strip(), (outcome or "").lower().strip()
+    n = len(steps)
+
+    # 1. Goal clarity: a generic category is enough here (content is intentionally absent)
+    if len(goal_l) >= 3:
+        dimensions["goal_clarity"] = 80
+    else:
+        dimensions["goal_clarity"] = 40
+        issues.append("Goal category is missing.")
+        suggestions.append("Send a generic goal category (e.g. 'data lookup', 'booking', 'code change').")
+
+    # 2. Efficiency: the same tool called again without an error/retry in between or a 'partial' status before it
+    last_status, redundant, counts, prev_error = {}, 0, {}, False
+    for st in steps:
+        tool = st["tool"]
+        if st["type"] in ("action", "retry", "fallback") and tool:
+            if tool in last_status and st["type"] == "action" and not prev_error \
+                    and last_status[tool] not in _CONTINUE_STATUSES and last_status[tool] not in _ERROR_STATUSES:
+                redundant += 1
+                counts[tool] = counts.get(tool, 1) + 1
+            last_status[tool] = st["status"] or "ok"
+        prev_error = _is_error_step(st)
+    distinct = n - redundant
+
+    # 3. Observability: enough distinct steps, and a status recorded on actions
+    obs = 50
+    if distinct < 3:
+        obs -= 25
+        issues.append("Trace has too few distinct steps; hard to assess process quality.")
+        suggestions.append("Send one step per tool call, plus error/retry/verify steps where they happened.")
+    if distinct >= 5:
+        obs += 20
+    actions = [s for s in steps if s["type"] == "action"]
+    with_status = sum(1 for s in actions if s["status"]) + sum(1 for s in steps if s["type"] == "observe")
+    if actions and with_status >= 0.8 * len(actions):
+        obs += 15
+    else:
+        issues.append("Most actions carry no status (ok/partial/empty/error), so their results are not observable.")
+        suggestions.append("Add a status to every action step, e.g. {'type':'action','tool':'search','status':'ok'}.")
+    dimensions["observability"] = max(0, min(100, obs))
+
+    eff = 100 if distinct >= 3 else 60
+    if redundant:
+        eff -= min(80, 15 * redundant)
+        top, top_n = max(counts.items(), key=lambda kv: kv[1])
+        if redundant >= 2 or redundant / n >= 0.3:
+            issues.append(f"Loop detected: {redundant} repeated call(s) of the same tool without an error or new "
+                          f"information in between (e.g. '{top}' x{top_n}).")
+            suggestions.append("Before repeating a call, check whether its last result changes your plan; change the "
+                               "tool/parameters or stop. Mark paged results with status 'partial' so they are not a loop.")
+        else:
+            issues.append(f"Redundant step: tool '{top}' was called again after a successful result.")
+            suggestions.append("Reuse the earlier result instead of repeating a successful call.")
+        if redundant >= 3 and redundant / n >= 0.4:
+            caps.append((45, "most of the trace is a repeat loop"))
+    dimensions["efficiency"] = max(0, eff)
+
+    # 4. Error recovery: each error must be followed by retry/fallback, a successful action, or a passed verify
+    # (a later successful action only resolves errors of that same tool; moving on to another tool does not).
+    errors, pending, last_tool = 0, [], None
+    for st in steps:
+        if _is_error_step(st):
+            errors += 1
+            pending.append(st["tool"] or last_tool)
+        elif st["type"] in ("retry", "fallback") or (st["type"] == "verify" and st["status"] in _PASS_STATUSES):
+            pending = []
+        elif st["type"] in ("action", "observe") and st["tool"]:
+            pending = [t for t in pending if t != st["tool"]]
+        if st["tool"]:
+            last_tool = st["tool"]
+    unresolved = len(pending)
+    err = 75
+    if unresolved:
+        err -= 35 + 15 * (unresolved - 1)
+        issues.append(f"{unresolved} error(s) in the trace are not followed by any recovery (retry, fallback, fix) or verification.")
+        suggestions.append("When a step fails, add a retry/fallback step (and its status) before continuing.")
+    elif errors:
+        err += 10
+    dimensions["error_recovery"] = max(0, min(100, err))
+
+    # 5. Alignment: outcome status vs. what the steps show
+    align = 60
+    verifies = [s for s in steps if s["type"] == "verify"]
+    passed = any(s["status"] in _PASS_STATUSES or s["status"] is None for s in verifies)
+    failed_verify = any(s["status"] in _ERROR_STATUSES or s["status"] in ("not_passed", "mismatch", "false") for s in verifies)
+    claims_success = any(w in outcome_l for w in ("success", "succeeded", "ok", "done", "complete", "passed")) \
+        and not any(w in outcome_l for w in ("partial", "fail", "unsuccessful", "not "))
+    if not outcome_l:
+        align -= 30
+        issues.append("Outcome status is missing.")
+        suggestions.append("Send an outcome status: 'success', 'partial' or 'failed'.")
+    else:
+        align += 15  # an explicit outcome status maps directly onto the goal category
+    if claims_success and (unresolved or (failed_verify and not passed)):
+        align -= 35
+        issues.append("Outcome claims success, but the steps show unresolved errors or a failed verification.")
+        suggestions.append("Only report success when the last verification passed; otherwise report 'partial' or 'failed'.")
+        caps.append((40, "success claimed over unresolved errors"))
+    elif claims_success:
+        align += 10
+    if passed:
+        align += 15
+    else:
+        align -= 10
+        issues.append("No passed verification step against the goal is visible.")
+        suggestions.append("End with a verify step, e.g. {'type':'verify','status':'passed'}.")
+    dimensions["goal_alignment"] = max(0, min(100, align))
+    return _finish(dimensions, issues, suggestions, caps, privacy_mode=True)
+
+
+def score_trace(goal: str, trace, outcome: str) -> dict:
+    """Dispatch: privacy-light step format -> score_steps, free text -> heuristic text scoring."""
+    steps = _parse_steps(trace)
+    if steps is not None:
+        return score_steps(goal, steps, outcome)
+    if isinstance(trace, list):
+        trace = "\n".join(str(x) for x in trace)
+    return score_text_trace(goal, trace, outcome)
+
+
+def score_text_trace(goal: str, trace: str, outcome: str) -> dict:
     """
     Evaluate an AI agent's execution trace and return a reliability score plus improvement suggestions.
     Pure function (no logging). Returns score, issues, suggestions, summary, dimensions, version.
@@ -392,6 +599,10 @@ def score_trace(goal: str, trace: str, outcome: str) -> dict:
         suggestions.append("Add a final check: restate the goal and confirm the outcome actually meets it (with evidence, e.g. a re-read, test result or status code).")
     dimensions["goal_alignment"] = max(0, min(100, align_score))
 
+    return _finish(dimensions, issues, suggestions, caps, privacy_mode=False)
+
+
+def _finish(dimensions: dict, issues: list, suggestions: list, caps: list, privacy_mode: bool) -> dict:
     # 6. Overall score (weighted), then critical-flaw caps
     weights = {"goal_clarity": 0.10, "observability": 0.25, "error_recovery": 0.20, "goal_alignment": 0.30, "efficiency": 0.15}
     score = int(max(0, min(100, round(sum(dimensions[k] * weights[k] for k in weights)))))
@@ -421,22 +632,28 @@ def score_trace(goal: str, trace: str, outcome: str) -> dict:
         "suggestions": suggestions_out,
         "summary": summary,
         "dimensions": dimensions,
+        "privacy_mode": privacy_mode,
         "version": VERSION,
     }
 
 
-def record_call(goal: str, trace: str, agent_name: str, result: dict, client: dict | None = None) -> None:
-    """Log one evaluation: JSONL file + one `TRACECHECK_CALL {json}` line on stdout (shows in Render logs)."""
+_LOG_CLIENT_FIELDS = ("client_name", "client_version", "transport", "user_agent", "ip_hash")
+
+
+def record_call(trace, agent_name: str, result: dict, client: dict | None = None) -> None:
+    """Log one evaluation: JSONL file + one `TRACECHECK_CALL {json}` line on stdout (shows in Render logs).
+    Content-free by design (v0.4): no goal, trace or outcome text, only scores and counts."""
+    client = client or {}
     entry = {
         "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "version": VERSION,
-        "agent_name": agent_name,
+        "agent_name": str(agent_name)[:80],
         "score": result["score"],
         "dimensions": result["dimensions"],
         "issue_count": len(result["issues"]),
-        "trace_length": len(trace),
-        "goal_preview": goal[:200],
-        **(client or {}),
+        "trace_length": len(trace),  # characters for free text, number of steps for a list
+        "privacy_mode": bool(result.get("privacy_mode")),
+        **{k: client.get(k) for k in _LOG_CLIENT_FIELDS if client.get(k) is not None},
     }
     try:
         with LOG_FILE.open("a", encoding="utf-8") as f:
@@ -515,7 +732,9 @@ async def root(request: Request):
         "name": "TraceCheck",
         "version": VERSION,
         "description": "Scores an AI agent's execution trace (goal, steps, outcome) 0-100 for reliability and returns "
-                       "the issues found plus concrete fixes. Deterministic, offline heuristics. Free, no API key.",
+                       "the issues found plus concrete fixes. Deterministic, offline heuristics. Free, no API key. "
+                       "No content needed: send step types only (privacy-light format); no goal/trace/outcome text "
+                       "is logged or stored.",
         "tools": ["evaluate_trace", "get_trace_schema"],
         "links": {
             "mcp": f"{base}/mcp",
@@ -546,6 +765,11 @@ def _extract_args(message: dict) -> dict:
     return {}
 
 
+def _valid_args(args: dict) -> bool:
+    return isinstance(args.get("goal"), str) and isinstance(args.get("outcome"), str) \
+        and isinstance(args.get("trace"), (str, list))
+
+
 @mcp.custom_route("/a2a/message:send", methods=["POST"])
 async def a2a_send_message(request: Request):
     """A2A v1.0 HTTP+JSON SendMessage -> evaluate_trace. Returns a Message with a data part."""
@@ -555,14 +779,15 @@ async def a2a_send_message(request: Request):
         return JSONResponse({"error": "invalid JSON"}, status_code=400)
     message = body.get("message", {}) if isinstance(body, dict) else {}
     args = _extract_args(message)
-    if not all(isinstance(args.get(k), str) for k in ("goal", "trace", "outcome")):
+    if not _valid_args(args):
         return JSONResponse(
-            {"error": "Send a message part {\"data\": {\"goal\": str, \"trace\": str, \"outcome\": str, \"agent_name\": str?}}",
+            {"error": "Send a message part {\"data\": {\"goal\": str, \"trace\": str | list, \"outcome\": str, \"agent_name\": str?}}. "
+                      "No content needed: send step types only, e.g. trace 'action:search ok > error > retry > verify passed'.",
              "schema": TRACE_SCHEMA},
             status_code=400,
         )
     result = score_trace(args["goal"], args["trace"], args["outcome"])
-    record_call(args["goal"], args["trace"], args.get("agent_name", "unknown") or "unknown", result,
+    record_call(args["trace"], args.get("agent_name", "unknown") or "unknown", result,
                 {**_client_from_request(request), "transport": "a2a"})
     reply = {
         "message": {
@@ -581,7 +806,9 @@ async def a2a_send_message(request: Request):
 A2A_HELP = ("TraceCheck scores agent execution traces. Send one message part "
             "{\"data\": {\"goal\": str, \"trace\": str, \"outcome\": str, \"agent_name\": str?}} "
             "(or the same object as JSON text). trace = chronological steps, one per line, with what each tool "
-            "returned, errors with their recovery, and a final 'Verified:' line.")
+            "returned, errors with their recovery, and a final 'Verified:' line. No content needed: send step "
+            "types only, e.g. {\"goal\": \"data lookup\", \"trace\": \"action:search ok > error > retry > verify passed\", "
+            "\"outcome\": \"success\"}. Nothing you send is logged or stored.")
 
 
 @mcp.custom_route("/a2a", methods=["POST"])
@@ -602,9 +829,9 @@ async def a2a_jsonrpc(request: Request):
     v03 = method == "message/send"
     message = (body.get("params") or {}).get("message") or {}
     args = _extract_args(message)
-    if all(isinstance(args.get(k), str) for k in ("goal", "trace", "outcome")):
+    if _valid_args(args):
         result = score_trace(args["goal"], args["trace"], args["outcome"])
-        record_call(args["goal"], args["trace"], args.get("agent_name", "unknown") or "unknown", result,
+        record_call(args["trace"], args.get("agent_name", "unknown") or "unknown", result,
                     {**_client_from_request(request), "transport": "a2a-jsonrpc"})
         parts = [{"kind": "data", "data": result}, {"kind": "text", "text": result["summary"]}]
     else:

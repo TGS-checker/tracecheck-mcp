@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tracecheck-mcp"
-version = "0.3.1"
+version = "0.4.0"
 description = "MCP server that scores an AI agent's execution trace (0-100) and returns concrete improvement suggestions."
 readme = "README.md"
 license = "MIT"
