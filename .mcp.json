@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "tracecheck": {
+      "url": "https://tracecheck-mcp.onrender.com/mcp"
+    }
+  }
+}
