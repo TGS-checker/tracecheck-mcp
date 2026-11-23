@@ -3,6 +3,8 @@ TraceCheck MCP Server
 A minimal agent-first service for independent evaluation of agent execution traces.
 Helps agents improve their own processes by providing objective feedback.
 
+v0.4.1: GET /llms.txt, descriptions in agent search language (verify my run, self-check, detect loops,
+did I succeed), and a trailing bare 'final' step now counts as privacy-light (step type 'final').
 v0.4.0 (privacy release): content-free logging (no goal/trace/outcome text is stored, only scores and
 counts) and a privacy-light trace format: send step types + statuses only (list of {"type","tool","status"}
 or 'action:search ok > error > retry > verify passed'), scored by score_steps(). Free-text path unchanged.
@@ -44,7 +46,7 @@ except OSError:  # e.g. installed via uvx/pip on a machine without /workspace
     LOG_FILE = Path.home() / ".tracecheck" / "calls.jsonl"
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-VERSION = "0.4.0"
+VERSION = "0.4.1"
 # stdout carries JSON-RPC in stdio mode, so call lines go to stdout only in HTTP mode (set in main()).
 _CALL_STREAM = sys.stderr
 
@@ -67,10 +69,10 @@ mcp = MCPServer(
     website_url=REPO_URL,
     icons=ICONS,
     instructions=(
-        "Independent evaluation service for AI agent execution traces. "
-        "Submit a goal, the step-by-step trace of what the agent did, and the claimed outcome. "
-        "Receive a reliability score (0-100), detected issues, and concrete improvement suggestions. "
-        "Use this to improve your own process, recover from failures, or validate long-horizon work. "
+        "Self-check for AI agents: verify your run before you report success. "
+        "Call evaluate_trace with your goal, the steps you took and the outcome you claim; get a reliability score (0-100), "
+        "the issues found (loops, unrecovered errors, success claimed without evidence, no verification) and concrete fixes. "
+        "Use it to answer 'did I succeed?', evaluate a trace, detect loops, or improve your process between attempts. "
         "No content needed: send step types only (privacy-light format, e.g. 'action:search ok > error > retry > verify passed'). "
         "No goal/trace/outcome text is ever logged or stored. Free during the initial test phase."
     ),
@@ -79,9 +81,9 @@ mcp = MCPServer(
 
 
 EVALUATE_TRACE_DESCRIPTION = """\
-Get an independent, deterministic reliability check of a multi-step task you (an agent) just ran. Returns a 0-100 score, the issues found, and concrete fixes to apply on your next attempt.
+Verify my run / self-check: did I succeed? Get an independent, deterministic reliability score (0-100) for a multi-step task you (an agent) just ran, before reporting success. Evaluates the trace, detects loops, unrecovered errors and success claimed without evidence, and returns concrete fixes for your next attempt.
 
-No content needed: send step types only. PRIVACY-LIGHT FORMAT (recommended when your trace holds user data): goal = a generic category (e.g. "data lookup"), outcome = a status ("success", "partial", "failed"), trace = step types + statuses only, either a list [{"type":"action","tool":"search","status":"ok"}, {"type":"error"}, {"type":"retry"}, {"type":"verify","status":"passed"}] or a compact string "action:search ok > error > retry > verify passed". Step types: action, observe, error, retry, fallback, verify. Use status "partial" for a paged/incomplete result you will continue (not a loop). TraceCheck never logs or stores goal, trace or outcome text, only the score and counts.
+No content needed: send step types only. PRIVACY-LIGHT FORMAT (recommended when your trace holds user data): goal = a generic category (e.g. "data lookup"), outcome = a status ("success", "partial", "failed"), trace = step types + statuses only, either a list [{"type":"action","tool":"search","status":"ok"}, {"type":"error"}, {"type":"retry"}, {"type":"verify","status":"passed"}] or a compact string "action:search ok > error > retry > verify passed". Step types: action, observe, error, retry, fallback, verify, final. Use status "partial" for a paged/incomplete result you will continue (not a loop). TraceCheck never logs or stores goal, trace or outcome text, only the score and counts.
 
 WHEN TO CALL: after you finish (or give up on) a multi-step task that used tools, before you report "done" to the user, or after a failure you want to learn from. Free, no API key, fast and offline (keyword heuristics, no LLM). Call get_trace_schema first if unsure of the format.
 
@@ -108,7 +110,7 @@ TRACE_SCHEMA = {
         "note": "No content needed: send step types only. Nothing you send is logged or stored (only score + counts).",
         "goal": "a generic category, e.g. 'data lookup', 'booking', 'code change'",
         "trace": "list of steps {type, tool?, status?} OR compact string 'type[:tool] [status] > ...'. "
-                 "Types: action, observe, error, retry, fallback, verify. Statuses: ok, partial, empty, error/failed, passed.",
+                 "Types: action, observe, error, retry, fallback, verify, final. Statuses: ok, partial, empty, error/failed, passed.",
         "outcome": "a status: 'success', 'partial' or 'failed' (optionally a category)",
         "example_call": {
             "goal": "data lookup",
@@ -320,6 +322,9 @@ _STEP_TYPES = {
     "error": "error", "fail": "error", "failed": "error", "failure": "error", "exception": "error",
     "retry": "retry", "fallback": "fallback", "alternative": "fallback", "fix": "fallback",
     "verify": "verify", "verification": "verify", "check": "verify", "test": "verify", "validate": "verify",
+    # v0.4.1: a closing/hand-off step (e.g. '... > final'). Neutral marker: not an action, error or verification.
+    "final": "final", "done": "final", "finish": "final", "end": "final", "answer": "final", "report": "final",
+    "respond": "final", "reply": "final",
 }
 _ERROR_STATUSES = {"error", "failed", "fail", "failure", "timeout", "exception", "denied", "invalid", "notfound",
                    "not_found", "4xx", "5xx", "500", "404", "crash"}
@@ -369,6 +374,8 @@ def _parse_steps(trace) -> list | None:
 
 
 def _is_error_step(st: dict) -> bool:
+    if st["type"] == "final":  # 'final failed' reports the outcome; it is not a new error to recover from
+        return False
     return st["type"] == "error" or (st["status"] in _ERROR_STATUSES)
 
 
@@ -725,14 +732,29 @@ async def icon_svg(request: Request):
     return await _asset("icon.svg", "image/svg+xml")
 
 
+LLMS_TXT_FILE = Path(__file__).with_name("llms.txt")
+
+
+@mcp.custom_route("/llms.txt", methods=["GET"])
+async def llms_txt(request: Request):
+    """llms.txt convention: a plain-markdown summary for agents (what TraceCheck is, when to call it, endpoints)."""
+    from starlette.responses import PlainTextResponse
+    if not LLMS_TXT_FILE.is_file():
+        return JSONResponse({"error": "not found"}, status_code=404)
+    text = LLMS_TXT_FILE.read_text(encoding="utf-8").replace(LIVE_URL, _public_base(request))
+    return PlainTextResponse(text, media_type="text/markdown; charset=utf-8",
+                             headers={"Cache-Control": "public, max-age=3600"})
+
+
 @mcp.custom_route("/", methods=["GET"])
 async def root(request: Request):
     base = _public_base(request)
     return JSONResponse({
         "name": "TraceCheck",
         "version": VERSION,
-        "description": "Scores an AI agent's execution trace (goal, steps, outcome) 0-100 for reliability and returns "
-                       "the issues found plus concrete fixes. Deterministic, offline heuristics. Free, no API key. "
+        "description": "Self-check for AI agents: verify your run before reporting success. Scores an agent's execution "
+                       "trace (goal, steps, outcome) 0-100 for reliability, detects loops and unrecovered errors, and "
+                       "returns concrete fixes. Deterministic, offline heuristics. Free, no API key. "
                        "No content needed: send step types only (privacy-light format); no goal/trace/outcome text "
                        "is logged or stored.",
         "tools": ["evaluate_trace", "get_trace_schema"],
@@ -741,6 +763,7 @@ async def root(request: Request):
             "a2a_agent_card": f"{base}/.well-known/agent-card.json",
             "a2a": f"{base}/a2a",
             "health": f"{base}/health",
+            "llms_txt": f"{base}/llms.txt",
             "icon": f"{base}/icon.png",
             "source": REPO_URL,
             "docs": f"{REPO_URL}#readme",

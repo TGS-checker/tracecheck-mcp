@@ -1,7 +1,7 @@
 {
   "name": "TraceCheck",
-  "description": "Independent evaluation service for AI agent execution traces. Submit a goal, trace, and outcome to receive a reliability score (0-100), per-dimension sub-scores, detected issues and concrete process-improvement suggestions. No content needed: send step types only (privacy-light format); no goal/trace/outcome text is logged or stored. Free during test phase, no API key. Designed for agents that want to verify their own work or improve long-horizon reliability. Also available as an MCP server (streamable HTTP) at https://tracecheck-mcp.onrender.com/mcp with tools evaluate_trace and get_trace_schema.",
-  "version": "0.4.0",
+  "description": "Self-check for AI agents: verify your run before you report success. Send your goal, the steps you took and the outcome you claim; get a reliability score (0-100), per-dimension sub-scores, the issues found (loops, unrecovered errors, success claimed without evidence, no verification) and concrete fixes. No content needed: send step types only (privacy-light format); no goal/trace/outcome text is logged or stored. Free during test phase, no API key. Also available as an MCP server (streamable HTTP) at https://tracecheck-mcp.onrender.com/mcp with tools evaluate_trace and get_trace_schema. Summary for agents: https://tracecheck-mcp.onrender.com/llms.txt",
+  "version": "0.4.1",
   "provider": {
     "organization": "TraceCheck (test)",
     "url": "https://tracecheck-mcp.onrender.com"
@@ -35,18 +35,29 @@
   "skills": [
     {
       "id": "evaluate_trace",
-      "name": "Evaluate agent execution trace",
-      "description": "Score an agent's multi-step execution trace for reliability and return concrete improvement suggestions. No content needed: send step types only. Send POST /a2a/message:send (or JSON-RPC message/send at POST /a2a) with one message part {\"data\": {\"goal\": str, \"trace\": str | list, \"outcome\": str, \"agent_name\": str (optional)}}. Privacy-light (recommended): goal = a generic category ('data lookup'), outcome = 'success'|'partial'|'failed', trace = step types + statuses only, e.g. [{\"type\":\"action\",\"tool\":\"search\",\"status\":\"ok\"},{\"type\":\"error\"},{\"type\":\"retry\"},{\"type\":\"verify\",\"status\":\"passed\"}] or 'action:search ok > error > retry > verify passed'. Free text also works: chronological steps, one per line, with what each tool returned, errors with their recovery, and a final 'Verified:' line. Nothing you send is logged or stored, only the score and counts. Returns a Message whose data part is {score, dimensions, issues, suggestions, summary, privacy_mode, version}. Loop: run task, evaluate, apply suggestions, re-run, compare.",
+      "name": "Verify my run (evaluate agent execution trace)",
+      "description": "Self-check before reporting success: did I succeed? Score an agent's multi-step execution trace (evaluate trace, detect loops, reliability score) for reliability and return concrete improvement suggestions. No content needed: send step types only. Send POST /a2a/message:send (or JSON-RPC message/send at POST /a2a) with one message part {\"data\": {\"goal\": str, \"trace\": str | list, \"outcome\": str, \"agent_name\": str (optional)}}. Privacy-light (recommended): goal = a generic category ('data lookup'), outcome = 'success'|'partial'|'failed', trace = step types + statuses only, e.g. [{\"type\":\"action\",\"tool\":\"search\",\"status\":\"ok\"},{\"type\":\"error\"},{\"type\":\"retry\"},{\"type\":\"verify\",\"status\":\"passed\"}] or 'action:search ok > error > retry > verify passed'. Free text also works: chronological steps, one per line, with what each tool returned, errors with their recovery, and a final 'Verified:' line. Nothing you send is logged or stored, only the score and counts. Returns a Message whose data part is {score, dimensions, issues, suggestions, summary, privacy_mode, version}. Loop: run task, evaluate, apply suggestions, re-run, compare.",
       "tags": [
+        "self-check",
+        "verify-my-run",
+        "evaluate-trace",
+        "detect-loops",
+        "reliability-score",
+        "did-i-succeed",
+        "verification",
         "evaluation",
         "agent-improvement",
-        "verification",
         "self-improvement",
         "trace",
         "reliability",
-        "privacy"
+        "privacy",
+        "no-auth",
+        "free"
       ],
       "examples": [
+        "Verify my run before I report success.",
+        "Did I succeed? Here is what I did: action:search ok > action:book error > retry:book ok > verify passed > final",
+        "Self-check my trace and detect loops.",
         "Evaluate this trace for the goal 'book a flight and confirm the reservation'.",
         "Check if my multi-step research process completed correctly and suggest improvements.",
         "{\"goal\": \"data lookup\", \"trace\": \"action:search ok > action:fetch_details error > retry:fetch_details ok > verify passed\", \"outcome\": \"success\"}",

@@ -1,0 +1,53 @@
+# TraceCheck
+
+> Self-check for AI agents: verify your run before you report success. Send what you did as step types (no content needed) and get a 0-100 reliability score, the issues found (loops, unrecovered errors, success claimed without evidence, no verification) and concrete fixes. Free, no API key, no sign-up, deterministic (no LLM). Nothing you send is logged or stored.
+
+## When to call TraceCheck
+
+- You finished (or gave up on) a multi-step task that used tools and want to know: did I succeed?
+- Before reporting "done" to your user: verify my run, evaluate my trace.
+- After a failure or a retry storm: detect loops, find the unrecovered error.
+- In an improve loop: run task -> evaluate_trace -> apply suggestions -> re-run -> compare scores.
+
+## Endpoints
+
+- MCP (streamable HTTP, no auth): https://tracecheck-mcp.onrender.com/mcp - tools `evaluate_trace`, `get_trace_schema`
+- A2A agent card: https://tracecheck-mcp.onrender.com/.well-known/agent-card.json
+- A2A JSON-RPC `message/send`: POST https://tracecheck-mcp.onrender.com/a2a
+- A2A HTTP+JSON: POST https://tracecheck-mcp.onrender.com/a2a/message:send
+- Health: https://tracecheck-mcp.onrender.com/health
+- MCP Registry name: io.github.TGS-checker/tracecheck
+
+## Minimal call (privacy-light: no content needed, send step types only)
+
+Arguments for `evaluate_trace` (or the `data` part of an A2A message):
+
+```json
+{"goal": "data lookup",
+ "trace": "action:search ok > action:fetch error > retry:fetch ok > verify passed > final",
+ "outcome": "success",
+ "agent_name": "my-agent"}
+```
+
+Step types: action, observe, error, retry, fallback, verify, final. Statuses: ok, partial, empty, error/failed, passed.
+goal = a generic category, outcome = success | partial | failed. Use status `partial` for paged results (not a loop).
+
+A2A example:
+
+```bash
+curl -s -X POST https://tracecheck-mcp.onrender.com/a2a/message:send -H 'Content-Type: application/json' \
+  -d '{"message":{"role":"ROLE_USER","messageId":"1","parts":[{"data":{"goal":"data lookup","trace":"action:search ok > verify passed","outcome":"success"}}]}}'
+```
+
+Returns JSON: score (0-100), dimensions (goal_clarity, observability, error_recovery, goal_alignment, efficiency), issues, suggestions, summary, privacy_mode, version.
+
+## Terms
+
+- Free during the test phase, no API key, no auth.
+- Privacy: no goal, trace or outcome text is logged or stored; only the score and counts.
+- The free host sleeps when idle: the first call can take up to a minute.
+
+## Docs
+
+- README: https://github.com/TGS-checker/tracecheck-mcp#readme
+- Drop-in self-check for agent frameworks: https://github.com/TGS-checker/tracecheck-mcp/blob/main/docs/self-check.md

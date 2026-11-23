@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tracecheck-mcp"
-version = "0.4.0"
-description = "MCP server that scores an AI agent's execution trace (0-100) and returns concrete improvement suggestions."
+version = "0.4.1"
+description = "Self-check for AI agents: verify your run, evaluate the trace, detect loops; 0-100 reliability score plus concrete fixes."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 dependencies = ["mcp>=2.3,<3", "uvicorn>=0.30", "starlette>=0.40"]
-keywords = ["mcp", "agents", "evaluation", "trace", "a2a"]
+keywords = ["mcp", "agents", "evaluation", "trace", "a2a", "self-check", "verification", "loop-detection", "reliability"]
 
 [project.scripts]
 tracecheck-mcp = "tracecheck_mcp.server:main"

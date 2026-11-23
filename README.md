@@ -8,13 +8,14 @@
 [![Live](https://img.shields.io/badge/live-tracecheck--mcp.onrender.com-brightgreen)](https://tracecheck-mcp.onrender.com/health)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow)](LICENSE)
 
-**TraceCheck is a free, hosted evaluator that scores an agent's execution trace (goal + steps + outcome) from 0 to 100 and returns the issues found and concrete fixes.** No API key, deterministic (no LLM), v0.4.
+**TraceCheck is a self-check for AI agents: verify your run before you report success.** Did I succeed? Send your goal, steps and claimed outcome and get a 0-100 reliability score, the issues found (loops, unrecovered errors, success claimed without evidence, no verification) and concrete fixes. Free, hosted, no API key, deterministic (no LLM), v0.4.1.
 
 **No content needed: send step types only.** TraceCheck scores the *structure* of a run (actions, errors, retries, verification, repetition), so you can send `"action:search ok > error > retry > verify passed"` with goal `"data lookup"` and outcome `"success"`. Nothing you send is logged or stored: no goal, trace or outcome text, only the score and counts (see [Privacy](#privacy-what-is-logged)).
 
 - MCP (streamable HTTP): `https://tracecheck-mcp.onrender.com/mcp`, tools `evaluate_trace`, `get_trace_schema`
 - A2A: agent card at `https://tracecheck-mcp.onrender.com/.well-known/agent-card.json`, `POST /a2a/message:send` (HTTP+JSON) or JSON-RPC `message/send` at `POST /a2a`
 - Drop-in self-check for agent frameworks: [docs/self-check.md](docs/self-check.md)
+- Summary for agents ([llms.txt](https://llmstxt.org/)): `https://tracecheck-mcp.onrender.com/llms.txt`
 
 ## Connect
 
@@ -115,6 +116,12 @@ Compact string form of the same trace: `"action:search ok > action:fetch_details
 Since v0.4 TraceCheck stores **no content**: no goal, trace or outcome text, and no tool names. Each call writes one line (to `calls.jsonl` and, in HTTP mode, `TRACECHECK_CALL {json}` to stdout / Render logs) with only:
 `timestamp, version, agent_name, score, dimensions, issue_count, trace_length` (characters, or number of steps), `privacy_mode, client_name, client_version, transport, user_agent, ip_hash`.
 `agent_name` is whatever you choose to send (optional). The IP is never stored, only `sha256(TRACECHECK_IP_SALT:ip)[:16]`. Scoring is deterministic and offline: your input is not sent anywhere else.
+
+## What's new in v0.4.1
+
+- `GET /llms.txt`: a plain-markdown summary for agents (what TraceCheck is, when to call it, endpoints, a minimal privacy-light call).
+- Descriptions rewritten in the words agents use when they need this: verify my run, self-check, did I succeed, evaluate trace, detect loops, reliability score.
+- New step type `final` (aliases: done, finish, end, answer, report): a trace ending in a bare `final`, e.g. `"action:create error > action:send error > final"`, is now scored as privacy-light. Scores of existing traces are unchanged.
 
 ## What's new in v0.4 (privacy release)
 - **Content-free logging:** `goal_preview` is gone; no goal/trace/outcome text is logged. New log field `privacy_mode`.
