@@ -41,6 +41,13 @@ curl -s -X POST https://tracecheck-mcp.onrender.com/a2a/message:send -H 'Content
 
 Returns JSON: score (0-100), dimensions (goal_clarity, observability, error_recovery, goal_alignment, efficiency), issues, suggestions, summary, privacy_mode, version.
 
+## Use with your framework (copy-paste configs)
+
+- LangChain / LangGraph: https://github.com/TGS-checker/tracecheck-mcp/blob/main/docs/integrations/langchain.md
+- CrewAI: https://github.com/TGS-checker/tracecheck-mcp/blob/main/docs/integrations/crewai.md
+- OpenAI Agents SDK: https://github.com/TGS-checker/tracecheck-mcp/blob/main/docs/integrations/openai-agents.md
+- Claude Code, Claude Desktop, Cursor: https://github.com/TGS-checker/tracecheck-mcp/blob/main/docs/integrations/claude.md
+
 ## Terms
 
 - Free during the test phase, no API key, no auth.

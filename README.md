@@ -8,7 +8,7 @@
 [![Live](https://img.shields.io/badge/live-tracecheck--mcp.onrender.com-brightgreen)](https://tracecheck-mcp.onrender.com/health)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow)](LICENSE)
 
-**TraceCheck is a self-check for AI agents: verify your run before you report success.** Did I succeed? Send your goal, steps and claimed outcome and get a 0-100 reliability score, the issues found (loops, unrecovered errors, success claimed without evidence, no verification) and concrete fixes. Free, hosted, no API key, deterministic (no LLM), v0.4.1.
+**TraceCheck is a self-check for AI agents: verify your run before you report success.** Did I succeed? Send your goal, steps and claimed outcome and get a 0-100 reliability score, the issues found (loops, unrecovered errors, success claimed without evidence, no verification) and concrete fixes. Free, hosted, no API key, deterministic (no LLM), v0.4.2.
 
 **No content needed: send step types only.** TraceCheck scores the *structure* of a run (actions, errors, retries, verification, repetition), so you can send `"action:search ok > error > retry > verify passed"` with goal `"data lookup"` and outcome `"success"`. Nothing you send is logged or stored: no goal, trace or outcome text, only the score and counts (see [Privacy](#privacy-what-is-logged)).
 
@@ -16,6 +16,10 @@
 - A2A: agent card at `https://tracecheck-mcp.onrender.com/.well-known/agent-card.json`, `POST /a2a/message:send` (HTTP+JSON) or JSON-RPC `message/send` at `POST /a2a`
 - Drop-in self-check for agent frameworks: [docs/self-check.md](docs/self-check.md)
 - Summary for agents ([llms.txt](https://llmstxt.org/)): `https://tracecheck-mcp.onrender.com/llms.txt`
+
+## Use with your framework
+
+Copy-paste config plus a "call `evaluate_trace` before reporting success" instruction: [LangChain / LangGraph](docs/integrations/langchain.md) · [CrewAI](docs/integrations/crewai.md) · [OpenAI Agents SDK](docs/integrations/openai-agents.md) · [Claude Code / Desktop / Cursor](docs/integrations/claude.md)
 
 ## Connect
 

@@ -8,6 +8,8 @@ Output: `{score 0-100, dimensions, issues, suggestions, summary, privacy_mode, v
 
 **No content needed: send step types only.** If your run touches user data, use the privacy-light format: `goal` = a generic category (`"data lookup"`), `outcome` = `"success"`, `"partial"` or `"failed"`, and `trace` = step types and statuses only, as a list (`[{"type":"action","tool":"search","status":"ok"}, {"type":"error"}, {"type":"retry"}, {"type":"verify","status":"passed"}]`) or a compact string (`"action:search ok > error > retry > verify passed"`). TraceCheck never logs or stores goal, trace or outcome text, only the score and counts.
 
+Using a framework? Copy-paste configs: [LangChain](integrations/langchain.md) · [CrewAI](integrations/crewai.md) · [OpenAI Agents SDK](integrations/openai-agents.md) · [Claude Code / Desktop / Cursor](integrations/claude.md).
+
 ## Option 1: MCP (Python, `pip install "mcp>=2.3"`)
 ```python
 import asyncio, json

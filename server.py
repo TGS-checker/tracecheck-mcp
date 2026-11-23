@@ -3,6 +3,7 @@ TraceCheck MCP Server
 A minimal agent-first service for independent evaluation of agent execution traces.
 Helps agents improve their own processes by providing objective feedback.
 
+v0.4.2: framework integration docs (docs/integrations/), linked from /llms.txt. Scoring unchanged.
 v0.4.1: GET /llms.txt, descriptions in agent search language (verify my run, self-check, detect loops,
 did I succeed), and a trailing bare 'final' step now counts as privacy-light (step type 'final').
 v0.4.0 (privacy release): content-free logging (no goal/trace/outcome text is stored, only scores and
@@ -46,7 +47,7 @@ except OSError:  # e.g. installed via uvx/pip on a machine without /workspace
     LOG_FILE = Path.home() / ".tracecheck" / "calls.jsonl"
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-VERSION = "0.4.1"
+VERSION = "0.4.2"
 # stdout carries JSON-RPC in stdio mode, so call lines go to stdout only in HTTP mode (set in main()).
 _CALL_STREAM = sys.stderr
 
