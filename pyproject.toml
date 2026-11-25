@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tracecheck-mcp"
-version = "0.4.2"
+version = "0.4.3"
 description = "Self-check for AI agents: verify your run, evaluate the trace, detect loops; 0-100 reliability score plus concrete fixes."
 readme = "README.md"
 license = "MIT"

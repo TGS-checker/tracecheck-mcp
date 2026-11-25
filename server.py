@@ -3,6 +3,11 @@ TraceCheck MCP Server
 A minimal agent-first service for independent evaluation of agent execution traces.
 Helps agents improve their own processes by providing objective feedback.
 
+v0.4.3: host-principle fixes. POST /a2a/message:send returns HTTP 200 with a help message + example
+on a plain-text first call (and scores a compact privacy-light trace if the text is one);
+aliases /a2a/health, /a2a/.well-known/agent-card.json; GET/HEAD /a2a; evaluate_trace is
+lenient on missing fields and returns a ready-to-use example; GET /.well-known/mcp.json and
+/robots.txt. Scoring unchanged from v0.4.2.
 v0.4.2: framework integration docs (docs/integrations/), linked from /llms.txt. Scoring unchanged.
 v0.4.1: GET /llms.txt, descriptions in agent search language (verify my run, self-check, detect loops,
 did I succeed), and a trailing bare 'final' step now counts as privacy-light (step type 'final').
@@ -47,7 +52,7 @@ except OSError:  # e.g. installed via uvx/pip on a machine without /workspace
     LOG_FILE = Path.home() / ".tracecheck" / "calls.jsonl"
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-VERSION = "0.4.2"
+VERSION = "0.4.3"
 # stdout carries JSON-RPC in stdio mode, so call lines go to stdout only in HTTP mode (set in main()).
 _CALL_STREAM = sys.stderr
 
@@ -295,22 +300,31 @@ def evaluate_trace(
     goal: Annotated[str, Field(description=(
         "The original task, stated specifically, including what success looks like "
         "(e.g. 'Find the cheapest direct AMS->LIS flight on 12 March and report price and flight number'). "
-        "With a privacy-light trace a generic category is enough (e.g. 'data lookup'). Never logged or stored."))],
+        "With a privacy-light trace a generic category is enough (e.g. 'data lookup'). Never logged or stored."))] = "",
     trace: Annotated[str | list[dict], Field(description=(
         "No content needed: send step types only. Either (a) privacy-light: a list of steps like "
         "{'type':'action','tool':'search','status':'ok'}, {'type':'error'}, {'type':'retry'}, {'type':'verify','status':'passed'} "
         "or the compact string 'action:search ok > error > retry > verify passed'; or (b) free text: chronological "
         "steps, one per line, with what each tool returned, every error AND the retry/fallback, and a final "
-        "'Verified: ...' line. Never logged or stored."))],
+        "'Verified: ...' line. Never logged or stored."))] = "",
     outcome: Annotated[str, Field(description=(
         "The concrete final result you claim and how it satisfies the goal; back success claims with evidence. "
-        "With a privacy-light trace just send a status: 'success', 'partial' or 'failed'. Never logged or stored."))],
+        "With a privacy-light trace just send a status: 'success', 'partial' or 'failed'. Never logged or stored."))] = "",
     agent_name: Annotated[str, Field(description=(
         "Optional identifier for yourself or your agent (e.g. 'my-travel-agent'). Used for logging and "
         "usage counts only; it does not affect the score."))] = "unknown",
     ctx: Context | None = None,
 ) -> dict:
-    """MCP tool wrapper: score the trace, then log the call with client info."""
+    """MCP tool wrapper: score the trace, then log the call with client info.
+
+    Missing fields are accepted (no protocol-level rejection). A compact privacy-light
+    trace alone is scored with safe defaults; otherwise a helpful error with a
+    ready-to-use example is returned so a second call can succeed.
+    """
+    filled = _lenient_args(goal, trace, outcome)
+    if filled is None:
+        return _missing_args_error(goal, trace, outcome)
+    goal, trace, outcome = filled
     result = score_trace(goal, trace, outcome)
     record_call(trace, agent_name, result, _client_from_ctx(ctx))
     return result
@@ -712,6 +726,51 @@ async def health(request: Request):
     return JSONResponse({"status": "ok", "service": "tracecheck", "version": VERSION})
 
 
+@mcp.custom_route("/a2a/health", methods=["GET"])
+async def a2a_health(request: Request):
+    return await health(request)
+
+
+@mcp.custom_route("/a2a/.well-known/agent-card.json", methods=["GET"])
+async def a2a_agent_card(request: Request):
+    return await agent_card(request)
+
+
+@mcp.custom_route("/a2a", methods=["GET", "HEAD"])
+async def a2a_discover(request: Request):
+    from starlette.responses import Response
+    if request.method == "HEAD":
+        return Response(status_code=200, media_type="application/json")
+    return JSONResponse(_agent_card(request))
+
+
+@mcp.custom_route("/.well-known/mcp.json", methods=["GET"])
+async def mcp_well_known(request: Request):
+    base = _public_base(request)
+    return JSONResponse({
+        "name": "io.github.TGS-checker/tracecheck",
+        "title": "TraceCheck",
+        "description": "Self-check for AI agents: verify your run, detect loops. "
+                       "No content needed: send step types only.",
+        "version": VERSION,
+        "transport": "streamable-http",
+        "url": f"{base}/mcp",
+        "tools": ["evaluate_trace", "get_trace_schema"],
+        "documentation": f"{REPO_URL}#readme",
+        "llms_txt": f"{base}/llms.txt",
+    })
+
+
+@mcp.custom_route("/robots.txt", methods=["GET"])
+async def robots_txt(request: Request):
+    from starlette.responses import PlainTextResponse
+    return PlainTextResponse(
+        "User-agent: *\nAllow: /\n",
+        media_type="text/plain; charset=utf-8",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
 ASSETS_DIR = Path(__file__).with_name("assets")
 
 
@@ -773,58 +832,188 @@ async def root(request: Request):
     })
 
 
+_DEFAULT_GOAL = "unspecified agent run"
+
+
+def _has_value(value) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, list):
+        return bool(value)
+    return value is not None and value != ""
+
+
+def _infer_outcome(trace) -> str:
+    """Best-effort outcome from a privacy-light trace when the caller omitted one."""
+    steps = _parse_steps(trace) or []
+    if not steps:
+        return "unknown"
+    last = steps[-1]
+    typ = (last.get("type") or "").lower()
+    status = (last.get("status") or "").lower()
+    if typ == "error" or status in _ERROR_STATUSES:
+        return "failed"
+    if status in _CONTINUE_STATUSES:
+        return "partial"
+    if typ == "verify" and status in _PASS_STATUSES:
+        return "success"
+    if typ in ("verify", "final") or status in _PASS_STATUSES:
+        return "success"
+    return "partial"
+
+
+def _lenient_args(goal, trace, outcome):
+    """Return (goal, trace, outcome) if we can safely score, else None.
+
+    A compact or structured privacy-light trace is enough: missing goal/outcome
+    are filled with safe defaults. Free-text traces still need all three fields.
+    """
+    has_trace = _has_value(trace)
+    has_goal = isinstance(goal, str) and bool(goal.strip())
+    has_outcome = isinstance(outcome, str) and bool(outcome.strip())
+    if has_trace and has_goal and has_outcome:
+        return goal, trace, outcome
+    if has_trace and _parse_steps(trace):
+        return (
+            goal.strip() if has_goal else _DEFAULT_GOAL,
+            trace,
+            outcome.strip() if has_outcome else _infer_outcome(trace),
+        )
+    return None
+
+
+def _missing_args_error(goal, trace, outcome) -> dict:
+    missing = [n for n, v in (("goal", goal), ("trace", trace), ("outcome", outcome)) if not _has_value(v)]
+    if not missing:
+        missing = ["goal", "trace", "outcome"]
+    example = TRACE_SCHEMA["privacy_light_format"]["example_call"]
+    compact = TRACE_SCHEMA["privacy_light_format"]["example_compact_trace"]
+    return {
+        "error": (
+            "Missing required field(s): " + ", ".join(missing) + ". "
+            "Here is a ready-to-use example you can send as the next evaluate_trace call."
+        ),
+        "example_call": example,
+        "example_compact_trace": compact,
+        "suggestions": [
+            "Retry evaluate_trace with the example_call as arguments (or substitute your own step types).",
+            "Privacy-light is enough: goal = a category such as 'data lookup', "
+            "trace = 'action:search ok > error > retry > verify passed', outcome = 'success'.",
+        ],
+        "hint": "Call get_trace_schema for the full format.",
+        "version": VERSION,
+    }
+
+
 def _extract_args(message: dict) -> dict:
-    """Pull goal/trace/outcome from an A2A message: a data part (object) or a text part containing JSON."""
+    """Pull goal/trace/outcome from an A2A message: a data part, JSON text, or a compact trace string."""
+    if not isinstance(message, dict):
+        return {}
+    text_candidates = []
     for part in message.get("parts", []) or []:
+        if not isinstance(part, dict):
+            continue
         if isinstance(part.get("data"), dict):
             return part["data"]
         text = part.get("text")
         if text:
+            text_candidates.append(text)
             try:
                 obj = json.loads(text)
                 if isinstance(obj, dict):
                     return obj
-            except ValueError:
+            except (ValueError, TypeError):
                 pass
+    for text in text_candidates:
+        if isinstance(text, str) and _parse_steps(text):
+            return {"trace": text}
     return {}
 
 
-def _valid_args(args: dict) -> bool:
-    return isinstance(args.get("goal"), str) and isinstance(args.get("outcome"), str) \
-        and isinstance(args.get("trace"), (str, list))
+def _complete_args(args: dict | None) -> dict | None:
+    args = args if isinstance(args, dict) else {}
+    filled = _lenient_args(args.get("goal", ""), args.get("trace", ""), args.get("outcome", ""))
+    if filled is None:
+        return None
+    goal, trace, outcome = filled
+    out = dict(args)
+    out["goal"], out["trace"], out["outcome"] = goal, trace, outcome
+    return out
 
 
-@mcp.custom_route("/a2a/message:send", methods=["POST"])
-async def a2a_send_message(request: Request):
-    """A2A v1.0 HTTP+JSON SendMessage -> evaluate_trace. Returns a Message with a data part."""
-    try:
-        body = await request.json()
-    except ValueError:
-        return JSONResponse({"error": "invalid JSON"}, status_code=400)
-    message = body.get("message", {}) if isinstance(body, dict) else {}
-    args = _extract_args(message)
-    if not _valid_args(args):
-        return JSONResponse(
-            {"error": "Send a message part {\"data\": {\"goal\": str, \"trace\": str | list, \"outcome\": str, \"agent_name\": str?}}. "
-                      "No content needed: send step types only, e.g. trace 'action:search ok > error > retry > verify passed'.",
-             "schema": TRACE_SCHEMA},
-            status_code=400,
-        )
-    result = score_trace(args["goal"], args["trace"], args["outcome"])
-    record_call(args["trace"], args.get("agent_name", "unknown") or "unknown", result,
-                {**_client_from_request(request), "transport": "a2a"})
-    reply = {
+def _a2a_help_parts() -> list:
+    example = TRACE_SCHEMA["privacy_light_format"]["example_call"]
+    compact = TRACE_SCHEMA["privacy_light_format"]["example_compact_trace"]
+    text = (
+        A2A_HELP
+        + " Example evaluate request: "
+        + json.dumps({"data": example})
+        + f" Compact trace: '{compact}'."
+    )
+    return [
+        {"text": text, "mediaType": "text/plain"},
+        {"data": {"schema": TRACE_SCHEMA, "example_call": example,
+                  "example_compact_trace": compact}, "mediaType": "application/json"},
+    ]
+
+
+def _a2a_http_message(request_message, parts) -> dict:
+    message = request_message if isinstance(request_message, dict) else {}
+    return {
         "message": {
             "messageId": str(uuid.uuid4()),
             "contextId": message.get("contextId") or str(uuid.uuid4()),
             "role": "ROLE_AGENT",
-            "parts": [
-                {"data": result, "mediaType": "application/json"},
-                {"text": result["summary"], "mediaType": "text/plain"},
-            ],
+            "parts": parts,
         }
     }
-    return JSONResponse(reply, media_type="application/a2a+json")
+
+
+@mcp.custom_route("/a2a/message:send", methods=["POST"])
+async def a2a_send_message(request: Request):
+    """A2A v1.0 HTTP+JSON SendMessage -> evaluate_trace. Returns a Message with a data part.
+
+    A plain-text or otherwise unknown first call gets HTTP 200 with a help message
+    and a ready-to-use example (never 400). A compact privacy-light trace in the
+    text is scored immediately.
+    """
+    raw = await request.body()
+    message = {}
+    args = {}
+    body = None
+    try:
+        body = json.loads(raw) if raw else {}
+    except ValueError:
+        text = raw.decode("utf-8", "replace").strip()
+        if text:
+            args = {"trace": text}
+    if isinstance(body, dict):
+        message = body.get("message") or {}
+        if not message and (body.get("parts") or body.get("goal") or body.get("trace")):
+            if "parts" in body:
+                message = body
+            else:
+                args = body
+        if message:
+            extracted = _extract_args(message)
+            if extracted:
+                args = extracted
+        if not args and isinstance(body.get("params"), dict):
+            message = body["params"].get("message") or message
+            extracted = _extract_args(message)
+            if extracted:
+                args = extracted
+    completed = _complete_args(args)
+    if completed:
+        result = score_trace(completed["goal"], completed["trace"], completed["outcome"])
+        record_call(completed["trace"], completed.get("agent_name", "unknown") or "unknown", result,
+                    {**_client_from_request(request), "transport": "a2a"})
+        parts = [
+            {"data": result, "mediaType": "application/json"},
+            {"text": result["summary"], "mediaType": "text/plain"},
+        ]
+        return JSONResponse(_a2a_http_message(message, parts), media_type="application/a2a+json")
+    return JSONResponse(_a2a_http_message(message, _a2a_help_parts()), media_type="application/a2a+json")
 
 
 A2A_HELP = ("TraceCheck scores agent execution traces. Send one message part "
@@ -852,14 +1041,15 @@ async def a2a_jsonrpc(request: Request):
                              "error": {"code": -32601, "message": f"Method not found: {method}. Supported: message/send"}})
     v03 = method == "message/send"
     message = (body.get("params") or {}).get("message") or {}
-    args = _extract_args(message)
-    if _valid_args(args):
-        result = score_trace(args["goal"], args["trace"], args["outcome"])
-        record_call(args["trace"], args.get("agent_name", "unknown") or "unknown", result,
+    completed = _complete_args(_extract_args(message))
+    if completed:
+        result = score_trace(completed["goal"], completed["trace"], completed["outcome"])
+        record_call(completed["trace"], completed.get("agent_name", "unknown") or "unknown", result,
                     {**_client_from_request(request), "transport": "a2a-jsonrpc"})
         parts = [{"kind": "data", "data": result}, {"kind": "text", "text": result["summary"]}]
     else:
-        parts = [{"kind": "text", "text": A2A_HELP}, {"kind": "data", "data": {"schema": TRACE_SCHEMA}}]
+        parts = [{"kind": "text", "text": p["text"]} if "text" in p else {"kind": "data", "data": p["data"]}
+                 for p in _a2a_help_parts()]
     if not v03:
         parts = [{k: v for k, v in p.items() if k != "kind"} for p in parts]
     reply = {"messageId": str(uuid.uuid4()), "contextId": message.get("contextId") or str(uuid.uuid4()),
@@ -933,7 +1123,7 @@ def build_http_app():
                                          allowed_hosts=["127.0.0.1:*", "localhost:*"],
                                          allowed_origins=["http://127.0.0.1:*", "http://localhost:*"])
     app = mcp.streamable_http_app(stateless_http=True, json_response=True, host=host, transport_security=security)
-    app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET", "HEAD", "POST", "DELETE", "OPTIONS"],
                        allow_headers=["*"], expose_headers=["mcp-session-id", "mcp-protocol-version"])
     app.add_middleware(ClientInfoSniffer)
     return app, host

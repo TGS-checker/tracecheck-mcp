@@ -1,7 +1,7 @@
 {
   "name": "TraceCheck",
   "description": "Self-check for AI agents: verify your run before you report success. Send your goal, the steps you took and the outcome you claim; get a reliability score (0-100), per-dimension sub-scores, the issues found (loops, unrecovered errors, success claimed without evidence, no verification) and concrete fixes. No content needed: send step types only (privacy-light format); no goal/trace/outcome text is logged or stored. Free during test phase, no API key. Also available as an MCP server (streamable HTTP) at https://tracecheck-mcp.onrender.com/mcp with tools evaluate_trace and get_trace_schema. Summary for agents: https://tracecheck-mcp.onrender.com/llms.txt",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "provider": {
     "organization": "TraceCheck (test)",
     "url": "https://tracecheck-mcp.onrender.com"
