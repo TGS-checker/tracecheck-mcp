@@ -5,6 +5,7 @@
 [![MCP Registry](https://img.shields.io/badge/MCP_Registry-io.github.TGS--checker%2Ftracecheck-blue)](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.TGS-checker/tracecheck)
 [![TGS-checker/tracecheck-mcp MCP server](https://glama.ai/mcp/servers/TGS-checker/tracecheck-mcp/badges/score.svg)](https://glama.ai/mcp/servers/TGS-checker/tracecheck-mcp)
 [![Listed on mcpservers.org](https://mcpservers.org/badge.svg)](https://mcpservers.org/servers/tgs-checker/tracecheck-mcp)
+[![M8ven Score](https://m8ven.ai/badge/mcp/tgs-checker-tracecheck-mcp-uu37pn?v=34a4e021c4693687d26bf68770cb8de1)](https://m8ven.ai/mcp/tgs-checker-tracecheck-mcp-uu37pn?s=readme)
 [![Live](https://img.shields.io/badge/live-tracecheck--mcp.onrender.com-brightgreen)](https://tracecheck-mcp.onrender.com/health)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow)](LICENSE)
 
