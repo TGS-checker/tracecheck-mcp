@@ -1,0 +1,247 @@
+{
+ "config_version": 1,
+ "note": "PUBLIC generic fallback. Coarse, round values so the service works out of the box. The live service runs a private, tuned configuration; scores from this fallback are not comparable to live scores.",
+ "weights": {
+  "goal_clarity": 0.2,
+  "observability": 0.2,
+  "error_recovery": 0.2,
+  "goal_alignment": 0.2,
+  "efficiency": 0.2
+ },
+ "caps": {
+  "loop": 50,
+  "loop_min_redundant": 3,
+  "loop_min_ratio": 0.5,
+  "ungrounded_success": 50,
+  "incomplete_data": 60
+ },
+ "efficiency": {
+  "full": 100,
+  "few_steps_score": 50,
+  "min_steps": 3,
+  "per_redundant": 20,
+  "max_redundant_penalty": 80,
+  "loop_min_redundant": 2,
+  "loop_min_ratio": 0.5,
+  "per_error": 0,
+  "max_error_penalty": 0
+ },
+ "steps": {
+  "goal_min_len": 3,
+  "goal_base": 80,
+  "goal_category_bonus": 0,
+  "goal_two_words_bonus": 0,
+  "goal_missing_score": 50,
+  "obs_base": 50,
+  "obs_per_step": 5,
+  "obs_step_cap": 10,
+  "obs_min_steps": 3,
+  "obs_few_score": 30,
+  "obs_observe_bonus": 0,
+  "obs_status_share": 0.5,
+  "obs_status_bonus": 0,
+  "err_base": 80,
+  "err_unresolved_penalty": 40,
+  "err_unresolved_extra": 20,
+  "err_high_stakes_penalty": 0,
+  "err_low_stakes_bonus": 0,
+  "err_recovered_bonus": 0,
+  "err_lowered_penalty": 20,
+  "align_base": 50,
+  "align_outcome_missing_penalty": 20,
+  "align_outcome_present_bonus": 10,
+  "align_ungrounded_penalty": 30,
+  "align_ungrounded_high_stakes_extra": 0,
+  "align_incomplete_penalty": 30,
+  "align_success_bonus": 10,
+  "align_lowered_success_penalty": 10,
+  "align_kind_mismatch_bonus": 10,
+  "align_verify_passed_bonus": 20,
+  "align_verify_failed_penalty": 10,
+  "align_no_verify_penalty": 10
+ },
+ "text": {
+  "near_dup_similarity": 1.0,
+  "max_retry_run": 1,
+  "goal_base": 80,
+  "goal_min_len": 10,
+  "goal_vague_penalty": 20,
+  "goal_no_verb_penalty": 0,
+  "obs_base": 50,
+  "obs_few_steps": 3,
+  "obs_few_penalty": 20,
+  "obs_many_steps": 5,
+  "obs_many_bonus": 10,
+  "obs_observed_bonus": 10,
+  "short_trace_chars": 50,
+  "short_trace_penalty": 20,
+  "err_base": 80,
+  "err_unresolved_penalty": 40,
+  "err_unresolved_extra": 20,
+  "err_recovered_bonus": 0,
+  "align_base": 50,
+  "align_word_len": 3,
+  "align_overlap_min": 1,
+  "align_overlap_bonus": 10,
+  "align_ungrounded_penalty": 30,
+  "align_success_bonus": 10,
+  "outcome_min_len": 10,
+  "outcome_vague_penalty": 20,
+  "align_verify_bonus": 20,
+  "align_no_verify_penalty": 10
+ },
+ "statuses": {
+  "error": [
+   "error",
+   "failed",
+   "timeout"
+  ],
+  "pass": [
+   "passed",
+   "ok",
+   "success"
+  ],
+  "continue": [
+   "partial"
+  ],
+  "failed_verify": [
+   "not_passed"
+  ],
+  "incomplete": [
+   "partial",
+   "empty"
+  ]
+ },
+ "words": {
+  "error": [
+   "error",
+   "failed",
+   "timeout"
+  ],
+  "negated_errors": [
+   "no error",
+   "no errors",
+   "0 failed"
+  ],
+  "recovery": [
+   "retry",
+   "fallback",
+   "fixed"
+  ],
+  "verify": [
+   "verified",
+   "verify",
+   "checked",
+   "passed"
+  ],
+  "success_text": [
+   "success",
+   "done"
+  ],
+  "goal_verbs": [
+   "find",
+   "create",
+   "check"
+  ],
+  "observation": [
+   "observed",
+   "result",
+   "returned",
+   "status"
+  ],
+  "step_prefixes": [
+   "1.",
+   "-",
+   "step"
+  ],
+  "success_outcome": [
+   "success",
+   "done"
+  ],
+  "outcome_negation": [
+   "partial",
+   "fail",
+   "not "
+  ]
+ },
+ "goal_categories": {
+  "data_lookup": [
+   "search",
+   "lookup",
+   "data"
+  ],
+  "booking": [
+   "book"
+  ],
+  "code_change": [
+   "code"
+  ],
+  "research": [
+   "research"
+  ],
+  "purchase": [
+   "buy",
+   "purchase"
+  ],
+  "messaging": [
+   "message",
+   "email"
+  ],
+  "file_ops": [
+   "file"
+  ],
+  "content": [
+   "content",
+   "write"
+  ]
+ },
+ "verify_fit": {
+  "code_change": [
+   "script",
+   "test",
+   "api",
+   "end_to_end"
+  ],
+  "data_lookup": [
+   "api",
+   "script",
+   "test",
+   "human",
+   "end_to_end"
+  ],
+  "booking": [
+   "api",
+   "human",
+   "end_to_end"
+  ],
+  "purchase": [
+   "api",
+   "human",
+   "end_to_end"
+  ],
+  "messaging": [
+   "api",
+   "human",
+   "end_to_end"
+  ],
+  "file_ops": [
+   "visual",
+   "human",
+   "script",
+   "test",
+   "end_to_end"
+  ],
+  "content": [
+   "visual",
+   "human",
+   "script",
+   "end_to_end"
+  ],
+  "research": [
+   "human",
+   "api",
+   "script",
+   "visual"
+  ]
+ }
+}

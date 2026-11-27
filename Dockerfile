@@ -2,7 +2,7 @@ FROM python:3.12-slim
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY server.py agent-card.json llms.txt ./
+COPY server.py agent-card.json llms.txt scoring_config.fallback.json ./
 COPY assets ./assets
 COPY data/serving.json ./data/serving.json
 ENV TRACECHECK_TRANSPORT=http \
