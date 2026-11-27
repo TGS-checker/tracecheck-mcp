@@ -67,15 +67,9 @@ ICONS = [
     Icon(src=f"{_ICON_RAW}/icon.svg", mime_type="image/svg+xml", sizes=["any"]),
 ]
 # Read-only, deterministic, offline scoring: safe for agents to call freely.
-# All four MCP annotation hints are set explicitly as booleans. The SDK
-# serializes them on tools/list as camelCase: readOnlyHint, destructiveHint,
-# idempotentHint, openWorldHint (required by the OpenAI directory and similar scanners).
-_READ_ONLY = dict(
-    read_only_hint=True,
-    destructive_hint=False,
-    idempotent_hint=True,
-    open_world_hint=False,
-)
+# Annotation hints are written with literal camelCase keys so static directory
+# scanners (M8ven, OpenAI) can find them in source. The SDK accepts these aliases
+# and tools/list still serializes the same four booleans.
 
 mcp = MCPServer(
     "TraceCheck",
@@ -162,7 +156,13 @@ TRACE_SCHEMA = {
 
 @mcp.tool(
     title="Get TraceCheck input schema",
-    annotations=ToolAnnotations(title="Get TraceCheck input schema", **_READ_ONLY),
+    annotations=ToolAnnotations(
+        title="Get TraceCheck input schema",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
     icons=ICONS,
     description=(
         "Return the exact input format TraceCheck's evaluate_trace expects, the scored dimensions and weights, "
@@ -300,7 +300,13 @@ def _client_from_request(request) -> dict:
 
 @mcp.tool(
     title="Evaluate agent execution trace",
-    annotations=ToolAnnotations(title="Evaluate agent execution trace", **_READ_ONLY),
+    annotations=ToolAnnotations(
+        title="Evaluate agent execution trace",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
     icons=ICONS,
     description=EVALUATE_TRACE_DESCRIPTION,
 )
