@@ -1,0 +1,28 @@
+{
+  "trace_id": "pod-2026-11-27-requirement-lowered",
+  "goal": "booking",
+  "trace": [
+    {
+      "type": "action",
+      "tool": "search",
+      "status": "ok"
+    },
+    {
+      "type": "action",
+      "tool": "reserve",
+      "status": "error"
+    },
+    {
+      "type": "fallback",
+      "tool": "reserve",
+      "status": "ok",
+      "requirement_lowered": true
+    },
+    {
+      "type": "verify",
+      "status": "passed"
+    }
+  ],
+  "outcome": "success",
+  "agent_name": "pod-fixture"
+}

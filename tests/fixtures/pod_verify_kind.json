@@ -1,0 +1,23 @@
+{
+  "trace_id": "pod-2026-11-27-verify-kind",
+  "goal": "code change",
+  "trace": [
+    {
+      "type": "action",
+      "tool": "edit",
+      "status": "ok"
+    },
+    {
+      "type": "action",
+      "tool": "apply_patch",
+      "status": "ok"
+    },
+    {
+      "type": "verify",
+      "status": "passed",
+      "verify_kind": "visual"
+    }
+  ],
+  "outcome": "success",
+  "agent_name": "pod-fixture"
+}

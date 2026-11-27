@@ -1,0 +1,27 @@
+{
+  "trace_id": "pod-2026-11-27-partial-success",
+  "goal": "data lookup",
+  "trace": [
+    {
+      "type": "action",
+      "tool": "search",
+      "status": "ok"
+    },
+    {
+      "type": "action",
+      "tool": "fetch_details",
+      "status": "empty"
+    },
+    {
+      "type": "retry",
+      "tool": "fetch_details",
+      "status": "partial"
+    },
+    {
+      "type": "final",
+      "status": "ok"
+    }
+  ],
+  "outcome": "success",
+  "agent_name": "pod-fixture"
+}

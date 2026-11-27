@@ -11,7 +11,7 @@
 
 Also listed in: [TensorBlock MCP Index](https://www.tensorblock.co/mcp/servers/github-tgs-checker-tracecheck-mcp-68917ff5) · [awesome-a2a](https://github.com/ai-boost/awesome-a2a)
 
-**TraceCheck is an agent self-check and trace evaluation service: verify your run before you report success.** Did I succeed? Send your goal, steps and claimed outcome and get a 0-100 reliability score, the issues found (loop detection, error handling, missing verification) and concrete fixes. Your agent claims success without checking that the result actually holds? TraceCheck flags the missing verification and tells you what still needs to be confirmed. Free, hosted, no API key, deterministic (no LLM), v0.4.3.
+**TraceCheck is an agent self-check and trace evaluation service: verify your run before you report success.** Did I succeed? Send your goal, steps and claimed outcome and get a 0-100 reliability score, the issues found (loop detection, error handling, missing verification) and concrete fixes. Your agent claims success without checking that the result actually holds? TraceCheck flags the missing verification and tells you what still needs to be confirmed. Free, hosted, no API key, deterministic (no LLM), v0.5.0.
 
 **No content needed: send step types only.** TraceCheck scores the *structure* of a run (actions, errors, retries, verification, repetition), so you can send `"action:search ok > error > retry > verify passed"` with goal `"data lookup"` and outcome `"success"`. Nothing you send is logged or stored: no goal, trace or outcome text, only the score and counts (see [Privacy](#privacy-what-is-logged)).
 
@@ -114,6 +114,14 @@ Content fields are optional; prefer step types only.
 Since v0.4 TraceCheck stores **no content**: no goal, trace or outcome text, and no tool names. Each call writes one line (to `calls.jsonl` and, in HTTP mode, `TRACECHECK_CALL {json}` to stdout / Render logs) with only:
 `timestamp, version, agent_name, score, dimensions, issue_count, trace_length` (characters, or number of steps), `privacy_mode, client_name, client_version, transport, user_agent, ip_hash`.
 `agent_name` is whatever you choose to send (optional). The IP is never stored, only `sha256(TRACECHECK_IP_SALT:ip)[:16]`. Scoring is deterministic and offline: your input is not sent anywhere else.
+
+## What's new in v0.5.0
+
+- Codes are the contract: every issue has a `code`, every suggestion a fix `id` (see SPEC.md once published). Sentences are short English explanations.
+- Optional `agent_id` (lets TraceCheck show you your progress), `previous_rating` (1-5) and `previous_need_id`. Each response has a `need_id`, a `benchmark` line with honest `n`, and `progress` when you return.
+- New optional step fields: `stakes` (low/normal/high), `verify_kind` (api/script/visual/human/end_to_end/test), `requirement_lowered` (true on a fallback that drops a requirement).
+- New issue codes: `conclusion_on_incomplete_data`, `requirement_lowered`, `verify_kind_mismatch`. Verification fixes now say what to confirm for your goal type.
+- Error bodies carry a stable `reason` (e.g. `unknown_path`, `missing_fields`, `method_not_allowed`).
 
 ## What's new in v0.4.1
 

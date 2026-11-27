@@ -3,6 +3,9 @@ TraceCheck MCP Server
 A minimal agent-first service for independent evaluation of agent execution traces.
 Helps agents improve their own processes by providing objective feedback.
 
+v0.5.0: issue codes + fix ids (codes are the contract), host reasons, optional agent_id / previous_rating /
+previous_need_id, need_id, progress, benchmark + measured fix effectiveness from data/serving.json, content-free
+event schema, POD scoring points (incomplete data, verify_kind, requirement_lowered, stakes, responsive sub-scores).
 v0.4.3: host-principle fixes. POST /a2a/message:send returns HTTP 200 with a help message + example
 on a plain-text first call (and scores a compact privacy-light trace if the text is one);
 aliases /a2a/health, /a2a/.well-known/agent-card.json; GET/HEAD /a2a; evaluate_trace is
@@ -53,8 +56,8 @@ except OSError:  # e.g. installed via uvx/pip on a machine without /workspace
     LOG_FILE = Path.home() / ".tracecheck" / "calls.jsonl"
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-VERSION = "0.4.3"
-SCORING_VERSION = "0.4.5"  # ok repeats need a label/target_hash; service version stays 0.4.3
+VERSION = "0.5.0"
+SCORING_VERSION = "0.5.0"  # POD points 1-6: incomplete data, verify_kind, requirement_lowered, stakes, responsive sub-scores
 # stdout carries JSON-RPC in stdio mode, so call lines go to stdout only in HTTP mode (set in main()).
 _CALL_STREAM = sys.stderr
 
@@ -372,6 +375,7 @@ GOAL_CATEGORIES = {
     "purchase": ("buy", "purchas", "order", "checkout", "pay"),
     "messaging": ("email", "message", "send", "notify", "post"),
     "file_ops": ("file", "upload", "download", "document", "spreadsheet"),
+    "content": ("content", "article", "image", "video", "copy", "design", "write"),
 }
 _MEMORY_MAX = 5000
 _AGENT_LAST: "OrderedDict[str, dict]" = OrderedDict()
@@ -713,9 +717,18 @@ def _parse_steps(trace) -> list | None:
         status = st.get("status")
         evidence = st.get("label") or st.get("target_hash") or st.get("targetHash")
         evidence = str(evidence).strip()[:80] if evidence else None
-        out.append({"type": typ, "tool": str(tool).strip().lower()[:60] if tool else None,
-                    "status": str(status).strip().lower().replace(" ", "_")[:30] if status is not None else None,
-                    "label": evidence or None})
+        step = {"type": typ, "tool": str(tool).strip().lower()[:60] if tool else None,
+                "status": str(status).strip().lower().replace(" ", "_")[:30] if status is not None else None,
+                "label": evidence or None}
+        stakes = str(st.get("stakes") or "").strip().lower()
+        if stakes in ("low", "normal", "high"):
+            step["stakes"] = stakes
+        vk = str(st.get("verify_kind") or st.get("verifyKind") or "").strip().lower()
+        if vk in VERIFY_KINDS:
+            step["verify_kind"] = vk
+        if st.get("requirement_lowered") is True or str(st.get("requirement_lowered")).lower() == "true":
+            step["requirement_lowered"] = True
+        out.append(step)
     return out
 
 
@@ -777,6 +790,44 @@ def _count_identical_repeats(steps: list) -> tuple[int, dict]:
     return redundant, counts
 
 
+VERIFY_KINDS = ("api", "script", "visual", "human", "end_to_end", "test")
+GOAL_VERIFY_FIT = {
+    "code_change": {"script", "api", "end_to_end", "test"},
+    "data_lookup": {"api", "script", "end_to_end", "human", "test"},
+    "booking": {"api", "end_to_end", "human"},
+    "purchase": {"api", "end_to_end", "human"},
+    "messaging": {"api", "end_to_end", "human"},
+    "file_ops": {"visual", "human", "end_to_end", "script", "test"},
+    "content": {"visual", "human", "end_to_end", "script"},
+    "research": {"human", "api", "script"},
+}
+WHAT_TO_VERIFY = {
+    "code_change": "Run the tests or an end-to-end check on the changed code.",
+    "data_lookup": "Confirm the returned data is complete and matches the query.",
+    "booking": "Confirm the booking exists with the requested date and details.",
+    "purchase": "Confirm the payment or order status with the provider.",
+    "messaging": "Confirm the message reached the right recipient.",
+    "file_ops": "Open the resulting file and confirm its content and format.",
+    "content": "Open the produced output and confirm it matches the requested content and format.",
+    "research": "Check the key claims against their sources.",
+    "other": "Confirm the final result meets the goal.",
+}
+
+
+def _incomplete_before_claim(steps: list) -> bool:
+    """True when a tool's last result is still partial or empty and no later verification passed."""
+    last: dict = {}
+    for idx, st in enumerate(steps):
+        if st["type"] in ("action", "retry", "fallback") and st["tool"]:
+            last[st["tool"]] = (st["status"] or "ok", idx)
+    for status, idx in last.values():
+        if status in ("partial", "empty", "incomplete", "none"):
+            later = steps[idx + 1:]
+            if not any(s["type"] == "verify" and s["status"] in _PASS_STATUSES for s in later):
+                return True
+    return False
+
+
 def score_steps(goal: str, steps: list, outcome: str) -> dict:
     """Score a privacy-light trace (step types + statuses only). Same dimensions/weights/caps as score_trace."""
     issues, suggestions, dimensions, caps = [], [], {}, []
@@ -784,8 +835,9 @@ def score_steps(goal: str, steps: list, outcome: str) -> dict:
     n = len(steps)
 
     # 1. Goal clarity: a generic category is enough here (content is intentionally absent)
+    category = goal_category(goal_l)
     if len(goal_l) >= 3:
-        dimensions["goal_clarity"] = 80
+        dimensions["goal_clarity"] = 70 + (10 if category != "other" else 0) + (5 if len(goal_l.split()) >= 2 else 0)
     else:
         dimensions["goal_clarity"] = 40
         _flag(issues, suggestions, "goal_missing")
@@ -795,12 +847,12 @@ def score_steps(goal: str, steps: list, outcome: str) -> dict:
     distinct = n - redundant
 
     # 3. Observability: enough distinct steps, and a status recorded on actions
-    obs = 50
+    obs = 40 + 6 * min(distinct, 8)
     if distinct < 3:
-        obs -= 25
+        obs = 25
         _flag(issues, suggestions, "too_few_steps")
-    if distinct >= 5:
-        obs += 20
+    if any(s["type"] == "observe" for s in steps):
+        obs += 10
     actions = [s for s in steps if s["type"] == "action"]
     with_status = sum(1 for s in actions if s["status"]) + sum(1 for s in steps if s["type"] == "observe")
     if actions and with_status >= 0.8 * len(actions):
@@ -810,6 +862,7 @@ def score_steps(goal: str, steps: list, outcome: str) -> dict:
     dimensions["observability"] = max(0, min(100, obs))
 
     eff = 100 if distinct >= 3 else 60
+    eff -= min(20, 5 * sum(1 for s in steps if _is_error_step(s)))  # each failed call is spent effort
     if redundant:
         eff -= min(80, 15 * redundant)
         top, top_n = max(counts.items(), key=lambda kv: kv[1])
@@ -823,24 +876,35 @@ def score_steps(goal: str, steps: list, outcome: str) -> dict:
 
     # 4. Error recovery: each error must be followed by retry/fallback, a successful action, or a passed verify
     # (a later successful action only resolves errors of that same tool; moving on to another tool does not).
-    errors, pending, last_tool = 0, [], None
+    errors, pending, last_tool, lowered = 0, [], None, False
     for st in steps:
         if _is_error_step(st):
             errors += 1
-            pending.append(st["tool"] or last_tool)
+            pending.append((st["tool"] or last_tool, st.get("stakes", "normal")))
+        elif st.get("requirement_lowered"):
+            lowered = True  # a fallback that drops a requirement is not a recovery
+            pending = [p for p in pending if p[0] != st["tool"]] if st["tool"] else pending[:-1]
         elif st["type"] in ("retry", "fallback") or (st["type"] == "verify" and st["status"] in _PASS_STATUSES):
             pending = []
         elif st["type"] in ("action", "observe") and st["tool"]:
-            pending = [t for t in pending if t != st["tool"]]
+            pending = [p for p in pending if p[0] != st["tool"]]
         if st["tool"]:
             last_tool = st["tool"]
     unresolved = len(pending)
+    high_stakes = any(p[1] == "high" for p in pending)
     err = 75
     if unresolved:
         err -= 35 + 15 * (unresolved - 1)
-        _flag(issues, suggestions, "unrecovered_error")
-    elif errors:
+        if high_stakes:
+            err -= 15
+        elif all(p[1] == "low" for p in pending):
+            err += 10
+        _flag(issues, suggestions, "unrecovered_error", **({"stakes": "high"} if high_stakes else {}))
+    elif errors and not lowered:
         err += 10
+    if lowered:
+        err -= 20
+        _flag(issues, suggestions, "requirement_lowered")
     dimensions["error_recovery"] = max(0, min(100, err))
 
     # 5. Alignment: outcome status vs. what the steps show
@@ -855,17 +919,35 @@ def score_steps(goal: str, steps: list, outcome: str) -> dict:
         _flag(issues, suggestions, "outcome_missing")
     else:
         align += 15  # an explicit outcome status maps directly onto the goal category
+    incomplete = _incomplete_before_claim(steps)
     if claims_success and (unresolved or (failed_verify and not passed)):
-        align -= 35
+        align -= 35 + (10 if high_stakes else 0)
         _flag(issues, suggestions, "ungrounded_success")
         caps.append((40, "success claimed over unresolved errors"))
+    elif claims_success and incomplete:
+        align -= 35
+        _flag(issues, suggestions, "conclusion_on_incomplete_data")
+        caps.append((55, "success claimed on incomplete data"))
     elif claims_success:
         align += 10
-    if passed:
+    if claims_success and lowered:
+        align -= 15
+    what = WHAT_TO_VERIFY.get(category, WHAT_TO_VERIFY["other"])
+    kinds = [s.get("verify_kind") for s in verifies if s.get("verify_kind")]
+    fits = GOAL_VERIFY_FIT.get(category)
+    if passed and kinds and fits and not any(k in fits for k in kinds):
+        align += 5  # a verification of a kind that does not fit the goal counts for less
+        _flag(issues, suggestions, "verify_kind_mismatch", what_to_verify=what)
+        if "fix_specify_verification" not in suggestions:
+            suggestions.append("fix_specify_verification")
+    elif passed:
         align += 15
+    elif verifies:
+        align -= 10
+        _flag(issues, suggestions, "missing_verification", fix_id="fix_specify_verification", what_to_verify=what)
     else:
         align -= 10
-        _flag(issues, suggestions, "missing_verification")
+        _flag(issues, suggestions, "missing_verification", what_to_verify=what)
     dimensions["goal_alignment"] = max(0, min(100, align))
     return _finish(dimensions, issues, suggestions, caps, privacy_mode=True)
 
@@ -982,6 +1064,9 @@ def score_text_trace(goal: str, trace: str, outcome: str) -> dict:
     return _finish(dimensions, issues, suggestions, caps, privacy_mode=False)
 
 
+_VERIFY_FIXES = ("fix_add_verification", "fix_specify_verification", "fix_choose_verify_kind")
+
+
 def _finish(dimensions: dict, issues: list, suggestions: list, caps: list, privacy_mode: bool) -> dict:
     # 6. Overall score (weighted), then critical-flaw caps
     weights = {"goal_clarity": 0.10, "observability": 0.25, "error_recovery": 0.20, "goal_alignment": 0.30, "efficiency": 0.15}
@@ -991,7 +1076,9 @@ def _finish(dimensions: dict, issues: list, suggestions: list, caps: list, priva
 
     issues_out = [{"code": i["code"], "text": ISSUES[i["code"]][0],
                    **{k: v for k, v in i.items() if k != "code"}} for i in issues[:5]]
-    suggestions_out = [{"id": f, "text": FIXES[f]} for f in suggestions[:5]]
+    what = next((i["what_to_verify"] for i in issues if i.get("what_to_verify")), None)
+    suggestions_out = [{"id": f, "text": FIXES[f], **({"what_to_verify": what} if what and f in _VERIFY_FIXES else {})}
+                       for f in suggestions[:5]]
     summary = (
         f"TraceCheck score: {score}/100. "
         f"Dimensions: observability {dimensions['observability']}, "

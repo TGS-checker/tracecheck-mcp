@@ -1,0 +1,22 @@
+{
+  "trace_id": "pod-2026-11-27-missing-verify",
+  "goal": "content production",
+  "trace": [
+    {
+      "type": "action",
+      "tool": "generate",
+      "status": "ok"
+    },
+    {
+      "type": "action",
+      "tool": "export",
+      "status": "ok"
+    },
+    {
+      "type": "final",
+      "status": "ok"
+    }
+  ],
+  "outcome": "success",
+  "agent_name": "pod-fixture"
+}

@@ -1,0 +1,24 @@
+{
+  "trace_id": "pod-2026-11-27-high-stakes",
+  "goal": "payment",
+  "trace": [
+    {
+      "type": "action",
+      "tool": "prepare",
+      "status": "ok",
+      "stakes": "low"
+    },
+    {
+      "type": "action",
+      "tool": "charge",
+      "status": "error",
+      "stakes": "high"
+    },
+    {
+      "type": "final",
+      "status": "ok"
+    }
+  ],
+  "outcome": "success",
+  "agent_name": "pod-fixture"
+}
