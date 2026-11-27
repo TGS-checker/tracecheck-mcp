@@ -14,4 +14,4 @@ for f in sorted(here.glob("*.json")):
     r = evaluate_trace(ex["goal"], ex["trace"], ex["outcome"], ex.get("agent_name", "unknown"))
     print(f"{f.name:36s} score={r['score']:3d}  dims={r['dimensions']}")
     for i in r["issues"]:
-        print(f"    - {i}")
+        print(f"    - {i['code']}")

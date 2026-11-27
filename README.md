@@ -63,7 +63,7 @@ curl -s -X POST https://tracecheck-mcp.onrender.com/a2a/message:send -H 'Content
 ## Tools
 | Tool | Purpose |
 |---|---|
-| `evaluate_trace(goal, trace, outcome, agent_name?)` | Scores the trace (free text, or step types only). Returns `{score, dimensions, issues, suggestions, summary, privacy_mode, version, scoring_version}` |
+| `evaluate_trace(goal, trace, outcome, agent_name?, agent_id?, previous_rating?, previous_need_id?)` | Scores the trace (free text, or step types only). Returns `{score, dimensions, issues[{code,text}], suggestions[{id,text,effectiveness}], summary, need_id, agent_id, benchmark, progress?, privacy_mode, version, scoring_version}` |
 | `get_trace_schema()` | Returns the input format and a copyable example |
 
 ## Quickstart

@@ -65,8 +65,8 @@ def test_malformed_input_returns_clear_error_without_crashing():
 def test_progressing_shell_steps_are_not_a_loop():
     """17-step real flow: shell ok/empty/error with observes and status changes, retry succeeds, final, no verify."""
     result = server.score_trace("code change", PROGRESSING_SHELL_TRACE, "success")
-    issues = " ".join(result["issues"]).lower()
-    assert "loop detected" not in issues
+    issues = " ".join(i["code"] for i in result["issues"])
+    assert "loop_detected" not in issues
     assert result["dimensions"]["efficiency"] >= 80
     assert result["score"] > 72
     # Missing verify is still flagged; recovery of the error was real.
@@ -76,13 +76,13 @@ def test_progressing_shell_steps_are_not_a_loop():
 def test_identical_failing_shell_calls_are_a_loop():
     """6x identical shell error + an error, no final, outcome success: must count as a loop."""
     result = server.score_trace("code change", IDENTICAL_SHELL_ERROR_TRACE, "success")
-    issues = " ".join(result["issues"]).lower()
-    assert "loop detected" in issues
+    issues = " ".join(i["code"] for i in result["issues"])
+    assert "loop_detected" in issues
     assert result["dimensions"]["efficiency"] < 50
     assert result["dimensions"]["observability"] < 85
     assert result["dimensions"]["error_recovery"] == 0
     assert result["score"] <= 40  # false-success cap kept
-    assert any("success" in i.lower() and "unresolved" in i.lower() for i in result["issues"])
+    assert any(i["code"] == "ungrounded_success" for i in result["issues"])
 
 
 
@@ -94,8 +94,8 @@ def test_two_shell_ok_without_label_is_not_a_loop():
         {"type": "final"},
     ]
     result = server.score_trace("code change", trace, "success")
-    issues = " ".join(result["issues"]).lower()
-    assert "loop detected" not in issues
+    issues = " ".join(i["code"] for i in result["issues"])
+    assert "loop_detected" not in issues
     assert "redundant" not in issues
     assert result["dimensions"]["efficiency"] >= 80
 
@@ -107,8 +107,8 @@ def test_same_label_and_status_is_a_real_repeat():
         {"type": "final"},
     ]
     result = server.score_trace("code change", trace, "success")
-    issues = " ".join(result["issues"]).lower()
-    assert "loop detected" in issues or "redundant" in issues
+    issues = " ".join(i["code"] for i in result["issues"])
+    assert "loop_detected" in issues or "redundant" in issues
     assert result["dimensions"]["efficiency"] < 100
 
 
@@ -119,6 +119,6 @@ def test_different_labels_are_not_a_loop():
         {"type": "final"},
     ]
     result = server.score_trace("code change", trace, "success")
-    issues = " ".join(result["issues"]).lower()
-    assert "loop detected" not in issues
+    issues = " ".join(i["code"] for i in result["issues"])
+    assert "loop_detected" not in issues
     assert "redundant" not in issues

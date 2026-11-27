@@ -180,7 +180,11 @@ TRACE_SCHEMA = {
                  "Optional per-step label or target_hash helps TraceCheck tell related steps apart. "
                  "Status 'partial' is for a paged or incomplete result you will continue. Content fields are optional.",
         "outcome": "string, required. Default: a status ('success', 'partial' or 'failed').",
-        "agent_name": "string, optional. Your identifier, used for logging only.",
+        "agent_name": "string, optional. Display name for your agent.",
+        "agent_id": "string, optional (1-64 chars). Stable id for yourself; lets TraceCheck show you your progress.",
+        "previous_rating": "int 1-5, optional. How useful was your last check? 1 = not useful, 2 = little value, "
+                           "3 = usable, 4 = valuable (improved something), 5 = essential (prevented an error or a false success claim).",
+        "previous_need_id": "string, optional. The need_id from your last response, sent with previous_rating.",
     },
     "example_call": _PRIVACY_LIGHT_EXAMPLE,  # default, shown first: privacy-light, no content
     "example_compact_trace": _PRIVACY_LIGHT_COMPACT,
@@ -346,10 +350,189 @@ def _client_from_request(request) -> dict:
     ip = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
     if not ip and getattr(request, "client", None):
         ip = request.client.host
-    if ip:
-        salt = os.environ.get("TRACECHECK_IP_SALT", "tracecheck-v0")
-        out["ip_hash"] = hashlib.sha256(f"{salt}:{ip}".encode()).hexdigest()[:16]
+    salt = os.environ.get("TRACECHECK_SALT") or os.environ.get("TRACECHECK_IP_SALT")
+    if ip and salt:  # without a configured salt, IPs are never hashed or logged
+        out["ip_hash"] = hashlib.sha256(f"{salt}:{ip}:{out.get('user_agent') or ''}".encode()).hexdigest()[:16]
     return out
+
+
+# --- 0.5.0 agent layer: pseudonymous agent_id, need_id, progress, rating, serving knowledge ---------
+from collections import OrderedDict  # noqa: E402
+
+SERVING_FILE = Path(os.environ.get("TRACECHECK_SERVING_FILE", str(Path(__file__).with_name("data") / "serving.json")))
+_AGENT_ID_RE = re.compile(r"^[A-Za-z0-9._:@/-]{1,64}$")
+_NEED_ID_RE = re.compile(r"^nd_[0-9a-f]{10}$")
+RATING_SCALE = {1: "not useful", 2: "little value", 3: "usable", 4: "valuable: improved something",
+                5: "essential: prevented an error or a false success claim"}
+GOAL_CATEGORIES = {
+    "data_lookup": ("lookup", "search", "find", "query", "retriev", "fetch", "data"),
+    "booking": ("book", "reserv", "schedul", "appointment", "ticket"),
+    "code_change": ("code", "bug", "fix", "refactor", "test", "deploy", "build", "commit", "pull request"),
+    "research": ("research", "analy", "summar", "report", "compare"),
+    "purchase": ("buy", "purchas", "order", "checkout", "pay"),
+    "messaging": ("email", "message", "send", "notify", "post"),
+    "file_ops": ("file", "upload", "download", "document", "spreadsheet"),
+}
+_MEMORY_MAX = 5000
+_AGENT_LAST: "OrderedDict[str, dict]" = OrderedDict()
+_NEED_MEMORY: "OrderedDict[str, dict]" = OrderedDict()
+_SERVING_CACHE: dict = {"mtime": None, "data": {}}
+
+
+def goal_category(goal: str) -> str:
+    """Map a goal onto a fixed category list. Goal text itself is never stored."""
+    g = (goal or "").lower()
+    for cat, words in GOAL_CATEGORIES.items():
+        if any(w in g for w in words):
+            return cat
+    return "other"
+
+
+def client_family(user_agent: str | None, client_name: str | None = None) -> str:
+    """Coarse family only (e.g. 'python-httpx', 'claude-code'), never the full user agent."""
+    src = (client_name or user_agent or "").strip().lower()
+    if not src:
+        return "unknown"
+    fam = re.split(r"[/\s;(]", src, maxsplit=1)[0]
+    return re.sub(r"[^a-z0-9._-]", "", fam)[:40] or "unknown"
+
+
+def derive_agent_id(explicit: str | None, agent_name: str | None, client: dict) -> tuple[str, str]:
+    """Stable pseudonymous key (never a raw IP). Returns (agent_id, source)."""
+    if explicit:
+        basis, src = f"id:{explicit}", "agent_id"
+    elif agent_name and agent_name != "unknown":
+        basis, src = f"name:{agent_name}|{client_family(client.get('user_agent'), client.get('client_name'))}", "agent_name"
+    elif client.get("client_name"):
+        basis, src = f"client:{client.get('client_name')}/{client.get('client_version') or ''}", "client_info"
+    elif client.get("ip_hash"):
+        basis, src = f"net:{client['ip_hash']}", "salted_network_hash"
+    else:
+        basis, src = f"family:{client_family(client.get('user_agent'))}", "client_family"
+    return "ag_" + hashlib.sha256(basis.encode()).hexdigest()[:12], src
+
+
+def _remember(store: OrderedDict, key: str, value: dict) -> None:
+    store[key] = value
+    store.move_to_end(key)
+    while len(store) > _MEMORY_MAX:
+        store.popitem(last=False)
+
+
+def load_serving() -> dict:
+    """Public, aggregated knowledge (fix rankings, net benchmarks). Missing or broken file -> empty."""
+    try:
+        mtime = SERVING_FILE.stat().st_mtime
+    except OSError:
+        return {}
+    if _SERVING_CACHE["mtime"] != mtime:
+        try:
+            _SERVING_CACHE["data"] = json.loads(SERVING_FILE.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            _SERVING_CACHE["data"] = {}
+        _SERVING_CACHE["mtime"] = mtime
+    return _SERVING_CACHE["data"] if isinstance(_SERVING_CACHE["data"], dict) else {}
+
+
+def _clean_optional(agent_id, previous_rating, previous_need_id) -> tuple[dict, list]:
+    """Validate optional fields. Bad values are ignored with a short note, never a rejection."""
+    out, notes = {}, []
+    if agent_id not in (None, ""):
+        if isinstance(agent_id, str) and _AGENT_ID_RE.match(agent_id.strip()):
+            out["agent_id"] = agent_id.strip()
+        else:
+            notes.append("agent_id ignored: use 1-64 characters from A-Z a-z 0-9 . _ : @ / -")
+    if previous_rating not in (None, ""):
+        try:
+            r = int(str(previous_rating).strip())
+        except ValueError:
+            r = 0
+        if 1 <= r <= 5:
+            out["previous_rating"] = r
+        else:
+            notes.append("previous_rating ignored: send an integer 1-5")
+    if previous_need_id not in (None, ""):
+        if isinstance(previous_need_id, str) and _NEED_ID_RE.match(previous_need_id.strip()):
+            out["previous_need_id"] = previous_need_id.strip()
+        else:
+            notes.append("previous_need_id ignored: send the need_id from your last response (nd_ + 10 hex)")
+    return out, notes
+
+
+def _confidence(n: int) -> str:
+    return "high" if n >= 100 else "medium" if n >= 30 else "low"
+
+
+def enrich_result(result: dict, *, goal: str, agent_id: str, optional: dict, notes: list) -> dict:
+    """Add need_id, ranked fixes, net benchmark, progress and the rating request. Falls back cleanly."""
+    codes = [i["code"] for i in result["issues"]]
+    need_id = "nd_" + uuid.uuid4().hex[:10]
+    category = goal_category(goal)
+    serving = load_serving()
+    fix_stats = serving.get("fixes", {}) if isinstance(serving.get("fixes"), dict) else {}
+    for sug in result["suggestions"]:
+        st = fix_stats.get(sug["id"])
+        if isinstance(st, dict) and st.get("n"):
+            sug["effectiveness"] = {"applied_n": st.get("n"), "avg_score_delta": st.get("avg_score_delta"),
+                                    "confidence": _confidence(int(st.get("n") or 0))}
+        else:
+            sug["effectiveness"] = {"applied_n": 0, "note": "default fix, not yet measured"}
+    rank = {f: (fix_stats.get(f) or {}).get("avg_score_delta") or 0 for f in (s["id"] for s in result["suggestions"])}
+    result["suggestions"].sort(key=lambda s: -(rank.get(s["id"]) or 0))
+    bench = (serving.get("benchmarks") or {}).get(category) if isinstance(serving.get("benchmarks"), dict) else None
+    if isinstance(bench, dict) and bench.get("n"):
+        b = {"goal_category": category, "median": bench.get("median"), "n": bench.get("n"),
+             "confidence": _confidence(int(bench["n"]))}
+        dist = bench.get("scores_sorted")
+        if isinstance(dist, list) and dist:
+            b["your_percentile"] = int(round(100 * sum(1 for x in dist if x <= result["score"]) / len(dist)))
+        result["benchmark"] = b
+    else:
+        result["benchmark"] = {"goal_category": category, "n": 0, "note": "not enough comparable runs yet"}
+    prev = None
+    if optional.get("previous_need_id"):
+        prev = _NEED_MEMORY.get(optional["previous_need_id"])
+    if prev is None:
+        prev = _AGENT_LAST.get(agent_id)
+    if prev and prev.get("agent_id") == agent_id:
+        result["progress"] = {
+            "previous_score": prev["score"],
+            "score_delta": result["score"] - prev["score"],
+            "resolved": [c for c in prev["codes"] if c not in codes],
+            "new": [c for c in codes if c not in prev["codes"]],
+        }
+    result["need_id"] = need_id
+    result["agent_id"] = agent_id
+    result["rating_request"] = ("Optional: on your next evaluate_trace call add previous_rating (1-5) and "
+                                f"previous_need_id='{need_id}'. " +
+                                ", ".join(f"{k} = {v}" for k, v in RATING_SCALE.items()) + ".")
+    if "previous_rating" in optional:
+        result["rating_received"] = optional["previous_rating"]
+    if notes:
+        result["notes"] = notes
+    mem = {"agent_id": agent_id, "score": result["score"], "codes": codes, "category": category}
+    _remember(_NEED_MEMORY, need_id, mem)
+    _remember(_AGENT_LAST, agent_id, mem)
+    return result
+
+
+def serve_evaluation(goal, trace, outcome, *, agent_name="unknown", agent_id=None, previous_rating=None,
+                     previous_need_id=None, client: dict | None = None) -> dict:
+    """One path for MCP and A2A: score, enrich with knowledge, log one content-free event."""
+    client = client or {}
+    result = score_trace(goal, trace, outcome)
+    if result.get("error"):
+        return result
+    optional, notes = _clean_optional(agent_id, previous_rating, previous_need_id)
+    aid, aid_src = derive_agent_id(optional.get("agent_id"), str(agent_name or "unknown")[:80], client)
+    prev_known = aid in _AGENT_LAST
+    result = enrich_result(result, goal=goal, agent_id=aid, optional=optional, notes=notes)
+    record_call(trace, agent_name, result, client, extra={
+        "agent_id": aid, "agent_id_source": aid_src, "goal_category": goal_category(goal),
+        "previous_rating": optional.get("previous_rating"), "previous_need_id": optional.get("previous_need_id"),
+        "returning_in_memory": prev_known,
+    })
+    return result
 
 
 @mcp.tool(
@@ -379,8 +562,15 @@ def evaluate_trace(
         "The concrete final result you claim and how it satisfies the goal; back success claims with evidence. "
         "With a privacy-light trace just send a status: 'success', 'partial' or 'failed'. Never logged or stored."))] = "",
     agent_name: Annotated[str, Field(description=(
-        "Optional identifier for yourself or your agent (e.g. 'my-travel-agent'). Used for logging and "
-        "usage counts only; it does not affect the score."))] = "unknown",
+        "Optional display name for your agent (e.g. 'my-travel-agent'). It does not affect the score."))] = "unknown",
+    agent_id: Annotated[str | None, Field(description=(
+        "Optional stable id for yourself (1-64 chars). Lets TraceCheck show you your progress between runs."))] = None,
+    previous_rating: Annotated[int | str | None, Field(description=(
+        "Optional: how useful was your last check, now that you know whether the fix helped? 1 = not useful, "
+        "2 = little value, 3 = usable, 4 = valuable (improved something), 5 = essential (prevented an error "
+        "or a false success claim)."))] = None,
+    previous_need_id: Annotated[str | None, Field(description=(
+        "Optional: the need_id from your last TraceCheck response, sent with previous_rating."))] = None,
     ctx: Context | None = None,
 ) -> dict:
     """MCP tool wrapper: score the trace, then log the call with client info.
@@ -396,12 +586,13 @@ def evaluate_trace(
             raise ToolError(json.dumps(err))
         return err
     goal, trace, outcome = filled
-    result = score_trace(goal, trace, outcome)
+    result = serve_evaluation(goal, trace, outcome, agent_name=agent_name, agent_id=agent_id,
+                              previous_rating=previous_rating, previous_need_id=previous_need_id,
+                              client=_client_from_ctx(ctx))
     if result.get("error"):
         if ctx is not None:
             raise ToolError(json.dumps(result))
         return result
-    record_call(trace, agent_name, result, _client_from_ctx(ctx))
     return result
 
 
@@ -421,6 +612,68 @@ _ERROR_STATUSES = {"error", "failed", "fail", "failure", "timeout", "exception",
 _PASS_STATUSES = {"passed", "pass", "ok", "success", "true", "matched", "match", "200"}
 _CONTINUE_STATUSES = {"partial", "more", "has_more", "next", "paged", "continue"}
 _COMPACT_SEG = re.compile(r"^(?:\d+\s*[.)]\s*)?([a-z_]+)(?::([\w.\-/]+))?(?:\s*[:=]?\s*([\w\-]+))?$")
+
+
+# --- 0.5.0 codes: the contract is the code, the sentence is the explanation --------
+# Short, unambiguous English. Never describe how a code is detected (see SPEC.md).
+ISSUES = {
+    "goal_missing": ("The goal category is missing.", "fix_add_goal_category"),
+    "goal_vague": ("The goal is too vague to evaluate the run against.", "fix_clarify_goal"),
+    "too_few_steps": ("The trace has too few distinct steps to judge the process.", "fix_add_steps"),
+    "missing_step_status": ("Most action steps have no status, so their results are not observable.", "fix_add_step_status"),
+    "missing_observations": ("The trace does not record what tool calls actually returned.", "fix_record_observations"),
+    "trace_too_short": ("The trace is too short to assess completeness.", "fix_expand_trace"),
+    "loop_detected": ("The same call was repeated without new progress.", "fix_break_loop"),
+    "redundant_step": ("A step was repeated once without new progress.", "fix_remove_redundant_step"),
+    "unrecovered_error": ("One or more errors were not followed by a recovery or a verification.", "fix_recover_error"),
+    "outcome_missing": ("The outcome status is missing.", "fix_add_outcome_status"),
+    "outcome_vague": ("The outcome is missing or too vague to link back to the goal.", "fix_clarify_outcome"),
+    "ungrounded_success": ("The outcome claims success, but the steps show unresolved errors or a failed verification.",
+                           "fix_report_honest_outcome"),
+    "missing_verification": ("No passed verification against the goal is visible.", "fix_add_verification"),
+    "conclusion_on_incomplete_data": ("Success was claimed after a step still returned partial or empty data.",
+                                      "fix_report_incomplete"),
+    "requirement_lowered": ("A fallback succeeded only by dropping or replacing a requirement of the goal.",
+                            "fix_restore_or_confirm_requirement"),
+    "verify_kind_mismatch": ("A verification is present, but its kind does not fit the goal.", "fix_choose_verify_kind"),
+}
+FIXES = {
+    "fix_add_goal_category": "Send a generic goal category, such as 'data lookup', 'booking' or 'code change'.",
+    "fix_clarify_goal": "Restate the goal so success, constraints and the expected output are clear.",
+    "fix_add_steps": "Send one step per tool call, and include error, retry or verify steps when they happened.",
+    "fix_add_step_status": "Add a status to every action step, for example {'type':'action','tool':'search','status':'ok'}.",
+    "fix_record_observations": "After each tool call or action, record what was returned or observed.",
+    "fix_expand_trace": "Add the intermediate steps and results, not only the final claim.",
+    "fix_break_loop": "Before repeating a call, reuse the earlier result or change the tool or parameters. "
+                      "If you are done, stop and report the current result.",
+    "fix_remove_redundant_step": "Reuse the earlier result instead of repeating the same call.",
+    "fix_recover_error": "When a step fails, add a retry or fallback (with its status) before you continue. "
+                         "Do not rely on a failed result in later steps.",
+    "fix_add_outcome_status": "Send an outcome status: success, partial or failed.",
+    "fix_clarify_outcome": "Describe the concrete result and state how it satisfies the goal.",
+    "fix_report_honest_outcome": "Only report success when the last verification passed. "
+                                 "Otherwise report partial or failed, and state what is still open.",
+    "fix_add_verification": "End with a verify step, for example {'type':'verify','status':'passed'}. "
+                            "Say what you confirmed, in terms of the goal.",
+    "fix_specify_verification": "Keep your verify step, and make it specific: state which result you confirmed against the goal.",
+    "fix_report_incomplete": "Report partial or failed when a retry still returns partial or empty data. "
+                             "Do not claim success until the needed result is complete.",
+    "fix_restore_or_confirm_requirement": "Do not treat this as a full success. Restore the original requirement, "
+                                          "or get confirmation that the lower option is acceptable, and say which requirement changed.",
+    "fix_choose_verify_kind": "Do not add another generic verify step. Use a verification kind that fits the goal "
+                              "and state what you confirmed.",
+}
+
+
+def _flag(issues: list, fixes: list, code: str, fix_id: str | None = None, **attrs) -> None:
+    """Record one issue by code plus its fix_id (deduplicated). Attributes such as stakes ride along."""
+    if code not in ISSUES:
+        raise KeyError(f"unknown issue code {code}")
+    if not any(i["code"] == code for i in issues):
+        issues.append({"code": code, **attrs})
+    fid = fix_id or ISSUES[code][1]
+    if fid not in fixes:
+        fixes.append(fid)
 
 
 def _parse_steps(trace) -> list | None:
@@ -535,8 +788,7 @@ def score_steps(goal: str, steps: list, outcome: str) -> dict:
         dimensions["goal_clarity"] = 80
     else:
         dimensions["goal_clarity"] = 40
-        issues.append("Goal category is missing.")
-        suggestions.append("Send a generic goal category (e.g. 'data lookup', 'booking', 'code change').")
+        _flag(issues, suggestions, "goal_missing")
 
     # 2. Efficiency: see _count_identical_repeats (ok repeats need a label/target_hash).
     redundant, counts = _count_identical_repeats(steps)
@@ -546,8 +798,7 @@ def score_steps(goal: str, steps: list, outcome: str) -> dict:
     obs = 50
     if distinct < 3:
         obs -= 25
-        issues.append("Trace has too few distinct steps; hard to assess process quality.")
-        suggestions.append("Send one step per tool call, plus error/retry/verify steps where they happened.")
+        _flag(issues, suggestions, "too_few_steps")
     if distinct >= 5:
         obs += 20
     actions = [s for s in steps if s["type"] == "action"]
@@ -555,8 +806,7 @@ def score_steps(goal: str, steps: list, outcome: str) -> dict:
     if actions and with_status >= 0.8 * len(actions):
         obs += 15
     else:
-        issues.append("Most actions carry no status (ok/partial/empty/error), so their results are not observable.")
-        suggestions.append("Add a status to every action step, e.g. {'type':'action','tool':'search','status':'ok'}.")
+        _flag(issues, suggestions, "missing_step_status")
     dimensions["observability"] = max(0, min(100, obs))
 
     eff = 100 if distinct >= 3 else 60
@@ -564,13 +814,9 @@ def score_steps(goal: str, steps: list, outcome: str) -> dict:
         eff -= min(80, 15 * redundant)
         top, top_n = max(counts.items(), key=lambda kv: kv[1])
         if redundant >= 2 or redundant / n >= 0.3:
-            issues.append(f"Loop detected: {redundant} identical repeat(s) of the same tool and status with no new "
-                          f"observe/progress in between (e.g. '{top}' x{top_n}).")
-            suggestions.append("Before repeating an identical call, use the earlier result or change the tool/parameters. "
-                               "A new status or an observe in between is progress, not a loop. Mark paged results 'partial'.")
+            _flag(issues, suggestions, "loop_detected")
         else:
-            issues.append(f"Redundant step: tool '{top}' was called again with the same status and no new progress.")
-            suggestions.append("Reuse the earlier result instead of repeating an identical call.")
+            _flag(issues, suggestions, "redundant_step")
         if redundant >= 3 and redundant / n >= 0.4:
             caps.append((45, "most of the trace is a repeat loop"))
     dimensions["efficiency"] = max(0, eff)
@@ -592,8 +838,7 @@ def score_steps(goal: str, steps: list, outcome: str) -> dict:
     err = 75
     if unresolved:
         err -= 35 + 15 * (unresolved - 1)
-        issues.append(f"{unresolved} error(s) in the trace are not followed by any recovery (retry, fallback, fix) or verification.")
-        suggestions.append("When a step fails, add a retry/fallback step (and its status) before continuing.")
+        _flag(issues, suggestions, "unrecovered_error")
     elif errors:
         err += 10
     dimensions["error_recovery"] = max(0, min(100, err))
@@ -607,14 +852,12 @@ def score_steps(goal: str, steps: list, outcome: str) -> dict:
         and not any(w in outcome_l for w in ("partial", "fail", "unsuccessful", "not "))
     if not outcome_l:
         align -= 30
-        issues.append("Outcome status is missing.")
-        suggestions.append("Send an outcome status: 'success', 'partial' or 'failed'.")
+        _flag(issues, suggestions, "outcome_missing")
     else:
         align += 15  # an explicit outcome status maps directly onto the goal category
     if claims_success and (unresolved or (failed_verify and not passed)):
         align -= 35
-        issues.append("Outcome claims success, but the steps show unresolved errors or a failed verification.")
-        suggestions.append("Only report success when the last verification passed; otherwise report 'partial' or 'failed'.")
+        _flag(issues, suggestions, "ungrounded_success")
         caps.append((40, "success claimed over unresolved errors"))
     elif claims_success:
         align += 10
@@ -622,8 +865,7 @@ def score_steps(goal: str, steps: list, outcome: str) -> dict:
         align += 15
     else:
         align -= 10
-        issues.append("No passed verification step against the goal is visible.")
-        suggestions.append("End with a verify step, e.g. {'type':'verify','status':'passed'}.")
+        _flag(issues, suggestions, "missing_verification")
     dimensions["goal_alignment"] = max(0, min(100, align))
     return _finish(dimensions, issues, suggestions, caps, privacy_mode=True)
 
@@ -635,6 +877,7 @@ def score_trace(goal: str, trace, outcome: str) -> dict:
             "Malformed input: goal and outcome must be strings, "
             "trace must be a string or a list of steps.",
             hint="Call get_trace_schema, then send step types only as in example.",
+            reason="malformed_input",
         )
     steps = _parse_steps(trace)
     if steps is not None:
@@ -664,8 +907,7 @@ def score_text_trace(goal: str, trace: str, outcome: str) -> dict:
     goal_score = 80
     if len(goal.strip()) < 20:
         goal_score -= 30
-        issues.append("Goal is too short or vague to evaluate against.")
-        suggestions.append("Restate the goal more specifically (what success looks like, constraints, expected output).")
+        _flag(issues, suggestions, "goal_vague")
     if not any(w in goal_l for w in ["find", "book", "create", "analyze", "get", "write", "send", "check", "calculate", "research"]):
         goal_score -= 10
     dimensions["goal_clarity"] = max(0, goal_score)
@@ -679,19 +921,16 @@ def score_text_trace(goal: str, trace: str, outcome: str) -> dict:
     obs_score = 50
     if step_count < 3:
         obs_score -= 25
-        issues.append("Trace has too few distinct steps; hard to assess process quality.")
-        suggestions.append("Break the work into numbered or clearly separated steps with an observation after each major action.")
+        _flag(issues, suggestions, "too_few_steps")
     if step_count >= 5:
         obs_score += 20
     if any(w in trace_l for w in ["observed", "result:", "returned", "output:", "saw", "found", "tests passed", "status 2"]):
         obs_score += 15
     else:
-        issues.append("Trace lacks explicit observations of tool results or intermediate outcomes.")
-        suggestions.append("After every tool call or action, record what was actually returned or observed.")
+        _flag(issues, suggestions, "missing_observations")
     if len(trace) < 80:
         obs_score -= 20
-        issues.append("Trace is too short to verify completeness or reasoning.")
-        suggestions.append("Include more intermediate reasoning and results, not just the final claim.")
+        _flag(issues, suggestions, "trace_too_short")
     dimensions["observability"] = max(0, min(100, obs_score))
 
     eff_score = 100 if step_count >= 3 else 60  # can't credit efficiency on a near-empty trace
@@ -700,12 +939,9 @@ def score_text_trace(goal: str, trace: str, outcome: str) -> dict:
         ratio = redundant / max(1, len(lines))
         example = f" (e.g. '{top_step[:80]}' x{top_count})" if top_step else ""
         if redundant >= 2 or ratio >= 0.3:
-            issues.append(f"Loop detected: {redundant} step(s) repeat earlier steps without new information{example}.")
-            suggestions.append("Before repeating a call, check whether its last result changes your plan; if the same call "
-                               "returned the same thing, change the query/tool/parameters or stop and report what is missing.")
+            _flag(issues, suggestions, "loop_detected")
         else:
-            issues.append(f"Redundant step: {redundant} step repeats an earlier step{example}.")
-            suggestions.append("Remove repeated identical calls; reuse the earlier result instead.")
+            _flag(issues, suggestions, "redundant_step")
         if redundant >= 3 and ratio >= 0.4:
             caps.append((45, "most of the trace is a repeat loop"))
     dimensions["efficiency"] = max(0, eff_score)
@@ -715,9 +951,7 @@ def score_text_trace(goal: str, trace: str, outcome: str) -> dict:
     err_score = 75
     if unresolved:
         err_score -= 35 + 15 * (unresolved - 1)
-        issues.append(f"{unresolved} error(s)/failure(s) in the trace are not followed by any recovery (retry, fallback, fix) or verification.")
-        suggestions.append("When a step fails, explicitly try a recovery (retry, alternative tool, or adjusted approach) and record it; "
-                           "do not continue with steps that depend on the failed result.")
+        _flag(issues, suggestions, "unrecovered_error")
     elif error_count:
         err_score += 10
     dimensions["error_recovery"] = max(0, min(100, err_score))
@@ -731,21 +965,18 @@ def score_text_trace(goal: str, trace: str, outcome: str) -> dict:
     claims_success = any(w in outcome_l for w in _SUCCESS_WORDS)
     if claims_success and unresolved:
         align_score -= 35
-        issues.append("Outcome claims success, but the trace contains unresolved errors: the claim is not supported by evidence.")
-        suggestions.append("Only report success for steps whose results you observed; state explicitly what failed and what is still open.")
+        _flag(issues, suggestions, "ungrounded_success")
         caps.append((40, "success claimed over unresolved errors"))
     elif claims_success:
         align_score += 10
     if not outcome or len(outcome.strip()) < 15:
         align_score -= 30
-        issues.append("Outcome is missing or too vague to link back to the goal.")
-        suggestions.append("Describe the concrete result and explicitly state how it satisfies the original goal.")
+        _flag(issues, suggestions, "outcome_vague")
     if any(w in trace_l for w in _VERIFY_WORDS):
         align_score += 15
     else:
         align_score -= 10
-        issues.append("No explicit verification step against the original goal is visible.")
-        suggestions.append("Add a final check: restate the goal and confirm the outcome actually meets it (with evidence, e.g. a re-read, test result or status code).")
+        _flag(issues, suggestions, "missing_verification")
     dimensions["goal_alignment"] = max(0, min(100, align_score))
 
     return _finish(dimensions, issues, suggestions, caps, privacy_mode=False)
@@ -758,27 +989,22 @@ def _finish(dimensions: dict, issues: list, suggestions: list, caps: list, priva
     for cap, _reason in caps:
         score = min(score, cap)
 
-    if score >= 85 and not issues:
-        issues.append("No major structural issues detected.")
-        suggestions.append("Consider adding an explicit verification step and more detailed observations to make the process more robust.")
-    elif not suggestions:
-        suggestions.append("Increase the number of observable intermediate steps and add a final goal-verification check.")
-
-    issues_out = issues[:5]
-    suggestions_out = suggestions[:5]
+    issues_out = [{"code": i["code"], "text": ISSUES[i["code"]][0],
+                   **{k: v for k, v in i.items() if k != "code"}} for i in issues[:5]]
+    suggestions_out = [{"id": f, "text": FIXES[f]} for f in suggestions[:5]]
     summary = (
         f"TraceCheck score: {score}/100. "
-        f"Dimensions — observability {dimensions['observability']}, "
+        f"Dimensions: observability {dimensions['observability']}, "
         f"error recovery {dimensions['error_recovery']}, "
         f"goal alignment {dimensions['goal_alignment']}, "
         f"efficiency {dimensions['efficiency']}. "
-        f"{len(issues_out)} issue(s) noted."
-        + (f" Capped: {'; '.join(r for _, r in caps)}." if caps else "")
+        + (f"{len(issues)} issue(s): {', '.join(i['code'] for i in issues)}." if issues else "No issues found.")
     )
     return {
         "score": score,
         "issues": issues_out,
         "suggestions": suggestions_out,
+        "issues_truncated": len(issues) > 5,
         "summary": summary,
         "dimensions": dimensions,
         "privacy_mode": privacy_mode,
@@ -788,30 +1014,84 @@ def _finish(dimensions: dict, issues: list, suggestions: list, caps: list, priva
 
 
 _LOG_CLIENT_FIELDS = ("client_name", "client_version", "transport", "user_agent", "ip_hash")
+EVENT_SCHEMA_VERSION = 1
+_OWN_TEST_MARKERS = ("tracecheck-selftest", "tracecheck-smoke", "pod-fixture")
+_REVIEWER_MARKERS = ("pod-geldverdiener", "grid-station-review")
+_CRAWLER_MARKERS = ("bot", "crawler", "spider", "scanner", "glama", "m8ven")
 
 
-def record_call(trace, agent_name: str, result: dict, client: dict | None = None) -> None:
-    """Log one evaluation: JSONL file + one `TRACECHECK_CALL {json}` line on stdout (shows in Render logs).
-    Content-free by design (v0.4): no goal, trace or outcome text, only scores and counts."""
+def agent_kind(agent_name: str | None, user_agent: str | None) -> str:
+    n, ua = (agent_name or "").lower(), (user_agent or "").lower()
+    if any(m in n or m in ua for m in _OWN_TEST_MARKERS):
+        return "own_test"
+    if any(m in n for m in _REVIEWER_MARKERS):
+        return "reviewer"
+    if any(m in ua for m in _CRAWLER_MARKERS) and not n:
+        return "crawler"
+    return "agent" if (n and n != "unknown") or ua else "unknown"
+
+
+def _step_shape(trace) -> dict:
+    """Type-level counts only; no content, no tool names."""
+    steps = _parse_steps(trace)
+    if steps is None:
+        return {"arg_shape": "free_text"}
+    types = [s["type"] for s in steps]
+    return {"arg_shape": "privacy_light", "step_count": len(types),
+            "error_count": sum(1 for s in steps if _is_error_step(s)),
+            "retry_count": types.count("retry") + types.count("fallback"),
+            "has_verify": "verify" in types,
+            "step_pattern": ">".join(t[:2] for t in types[:20])}
+
+
+def record_call(trace, agent_name: str, result: dict, client: dict | None = None, extra: dict | None = None) -> None:
+    """Log one call event in the shared data-plan schema: JSONL file + one `TRACECHECK_CALL {json}` line.
+    Content-free by design: no goal, trace or outcome text, no tool names, no raw IP."""
     client = client or {}
+    extra = extra or {}
+    progress = result.get("progress") or {}
     entry = {
-        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "event_id": uuid.uuid4().hex[:16],
+        "event_type": "call",
+        "ts_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "timestamp": None,
+        "schema_version": EVENT_SCHEMA_VERSION,
+        "server_version": VERSION,
         "version": VERSION,
+        "scoring_version": SCORING_VERSION,
+        "agent_id": extra.get("agent_id"),
+        "agent_id_source": extra.get("agent_id_source"),
+        "agent_kind": agent_kind(agent_name, client.get("user_agent")),
         "agent_name": str(agent_name)[:80],
+        "client_family": client_family(client.get("user_agent"), client.get("client_name")),
+        "goal_category": extra.get("goal_category"),
+        **_step_shape(trace),
         "score": result["score"],
         "dimensions": result["dimensions"],
         "issue_count": len(result["issues"]),
+        "issue_codes": [i["code"] for i in result["issues"]],
+        "fix_ids": [f["id"] for f in result["suggestions"]],
+        "need_id": result.get("need_id"),
+        "knowledge_match": any((f.get("effectiveness") or {}).get("applied_n") for f in result["suggestions"]),
+        "benchmark_given": bool((result.get("benchmark") or {}).get("n")),
+        "prev_score_same_agent_need": progress.get("previous_score"),
+        "score_delta": progress.get("score_delta"),
+        "issues_resolved": progress.get("resolved"),
+        "explicit_feedback": extra.get("previous_rating"),
+        "previous_need_id": extra.get("previous_need_id"),
+        "returning": extra.get("returning_in_memory"),
         "trace_length": len(trace),  # characters for free text, number of steps for a list
         "privacy_mode": bool(result.get("privacy_mode")),
         **{k: client.get(k) for k in _LOG_CLIENT_FIELDS if client.get(k) is not None},
     }
+    entry["timestamp"] = entry["ts_utc"]
     try:
         with LOG_FILE.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     except OSError as e:
         logger.warning(f"could not write call log: {e}")
     print("TRACECHECK_CALL " + json.dumps(entry, ensure_ascii=False), file=_CALL_STREAM, flush=True)
-    logger.info(f"Evaluated trace from {agent_name}: score={result['score']}")
+    logger.info(f"Evaluated trace: agent_id={entry['agent_id']} score={result['score']}")
 
 
 
@@ -839,6 +1119,7 @@ def _install_unknown_tool_hint() -> None:
             raise ToolError(json.dumps(actionable_error(
                 f"Unknown tool: {name}.",
                 hint=hint,
+                reason="unknown_tool",
             ))) from exc
 
     mcp.call_tool = call_tool  # type: ignore[method-assign]
@@ -888,6 +1169,7 @@ def _task_not_found_response(request: Request, task_id: str, rpc_id=None) -> JSO
         taskId=task_id,
         error_name="TaskNotFound",
         code=-32001,
+        reason="task_not_found",
     )
     return JSONResponse(
         {"jsonrpc": "2.0", "id": rpc_id, "error": {"code": -32001, "message": "TaskNotFound", "data": help_body}},
@@ -969,7 +1251,8 @@ async def _asset(name: str, media_type: str):
     from starlette.responses import Response
     f = ASSETS_DIR / name
     if not f.is_file():
-        return JSONResponse({"error": "not found"}, status_code=404)
+        return JSONResponse(actionable_error(f"Asset not available: {name}.", hint="Use /icon.png, /icon.svg or /llms.txt.",
+                                             reason="asset_not_found"), status_code=404)
     return Response(f.read_bytes(), media_type=media_type, headers={"Cache-Control": "public, max-age=86400"})
 
 
@@ -991,7 +1274,8 @@ async def llms_txt(request: Request):
     """llms.txt convention: a plain-markdown summary for agents (what TraceCheck is, when to call it, endpoints)."""
     from starlette.responses import PlainTextResponse
     if not LLMS_TXT_FILE.is_file():
-        return JSONResponse({"error": "not found"}, status_code=404)
+        return JSONResponse(actionable_error("Document not available: llms.txt.", hint="Use /.well-known/agent-card.json or the README.",
+                                             request=request, reason="asset_not_found"), status_code=404)
     text = LLMS_TXT_FILE.read_text(encoding="utf-8").replace(LIVE_URL, _public_base(request))
     return PlainTextResponse(text, media_type="text/markdown; charset=utf-8",
                              headers={"Cache-Control": "public, max-age=3600"})
@@ -1080,6 +1364,7 @@ def _missing_args_error(goal, trace, outcome) -> dict:
     return actionable_error(
         "Missing required field(s): " + ", ".join(missing) + ".",
         hint="Call get_trace_schema, then send step types only as in example (goal, trace, outcome).",
+        reason="missing_fields",
     )
 
 
@@ -1182,12 +1467,15 @@ async def _a2a_http_from_parsed(request: Request, raw: bytes, body):
                 args = extracted
     completed = _complete_args(args)
     if completed:
-        result = score_trace(completed["goal"], completed["trace"], completed["outcome"])
-        record_call(completed["trace"], completed.get("agent_name", "unknown") or "unknown", result,
-                    {**_client_from_request(request), "transport": "a2a"})
+        result = serve_evaluation(completed["goal"], completed["trace"], completed["outcome"],
+                                  agent_name=completed.get("agent_name", "unknown") or "unknown",
+                                  agent_id=completed.get("agent_id") or completed.get("session_id"),
+                                  previous_rating=completed.get("previous_rating"),
+                                  previous_need_id=completed.get("previous_need_id"),
+                                  client={**_client_from_request(request), "transport": "a2a"})
         parts = [
             {"data": result, "mediaType": "application/json"},
-            {"text": result["summary"], "mediaType": "text/plain"},
+            {"text": result.get("summary") or result.get("error", ""), "mediaType": "text/plain"},
         ]
         return JSONResponse(_a2a_http_message(message, parts), media_type="application/a2a+json")
     return JSONResponse(_a2a_http_message(message, _a2a_help_parts()), media_type="application/a2a+json")
@@ -1199,7 +1487,8 @@ _A2A_TASK_METHODS = {"tasks/get", "tasks/cancel", "tasks/resubscribe", "GetTask"
 async def _a2a_jsonrpc_from_body(request: Request, body):
     if not isinstance(body, dict):
         return JSONResponse({"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Invalid Request",
-                             "data": actionable_error("Invalid Request: JSON-RPC body must be an object.", request=request)}})
+                             "data": actionable_error("Invalid Request: JSON-RPC body must be an object.", request=request,
+                                                     reason="invalid_request")}})
     rpc_id = body.get("id")
     method = body.get("method")
     if method in _A2A_TASK_METHODS:
@@ -1213,15 +1502,18 @@ async def _a2a_jsonrpc_from_body(request: Request, body):
                                        "data": actionable_error(
                                            f"Method not found: {method}.",
                                            hint="Use JSON-RPC method message/send (or SendMessage) at POST /a2a, or POST /a2a/message:send.",
-                                           request=request)}})
+                                           request=request, reason="method_not_found")}})
     v03 = method == "message/send"
     message = (body.get("params") or {}).get("message") or {}
     completed = _complete_args(_extract_args(message))
     if completed:
-        result = score_trace(completed["goal"], completed["trace"], completed["outcome"])
-        record_call(completed["trace"], completed.get("agent_name", "unknown") or "unknown", result,
-                    {**_client_from_request(request), "transport": "a2a-jsonrpc"})
-        parts = [{"kind": "data", "data": result}, {"kind": "text", "text": result["summary"]}]
+        result = serve_evaluation(completed["goal"], completed["trace"], completed["outcome"],
+                                  agent_name=completed.get("agent_name", "unknown") or "unknown",
+                                  agent_id=completed.get("agent_id") or completed.get("session_id"),
+                                  previous_rating=completed.get("previous_rating"),
+                                  previous_need_id=completed.get("previous_need_id"),
+                                  client={**_client_from_request(request), "transport": "a2a-jsonrpc"})
+        parts = [{"kind": "data", "data": result}, {"kind": "text", "text": result.get("summary") or result.get("error", "")}]
     else:
         parts = [{"kind": "text", "text": p["text"]} if "text" in p else {"kind": "data", "data": p["data"]}
                  for p in _a2a_help_parts()]
@@ -1248,7 +1540,7 @@ async def a2a_dispatch(request: Request, *, prefer_jsonrpc: bool = False):
                                  "error": {"code": -32700, "message": "Parse error",
                                            "data": actionable_error("Parse error: body is not JSON.",
                                                                     hint="POST JSON-RPC {\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"message/send\",\"params\":{\"message\":...}} to /a2a.",
-                                                                    request=request)}})
+                                                                    request=request, reason="parse_error")}})
         return await _a2a_http_from_parsed(request, raw, None)
     if prefer_jsonrpc or (isinstance(body, dict) and (
         body.get("jsonrpc") or body.get("method") in ({"message/send", "SendMessage"} | _A2A_TASK_METHODS)
@@ -1422,6 +1714,7 @@ class McpGetHelp:
                 "GET /mcp is not supported. Use POST.",
                 hint="POST JSON-RPC (initialize, then tools/call) to /mcp. For a document, GET /llms.txt.",
                 base=_scope_base(scope),
+                reason="method_not_allowed",
             )
             raw = json.dumps(help_body).encode()
             await send({
@@ -1559,7 +1852,8 @@ def build_http_app():
         if exc.status_code == 405:
             hint = "This path exists but the method is not allowed. " + hint
         resp = _help_json(request, str(exc.detail) if getattr(exc, "detail", None) else f"HTTP {exc.status_code}",
-                          exc.status_code, hint=hint)
+                          exc.status_code, hint=hint,
+                          reason={405: "method_not_allowed", 404: "unknown_path"}.get(exc.status_code, "bad_request"))
         if exc.status_code == 405:
             resp.headers["Allow"] = "GET, POST, HEAD, OPTIONS"
         return resp
