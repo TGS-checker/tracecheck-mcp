@@ -106,3 +106,29 @@ def test_a2a_passes_agent_fields():
     part = next(p["data"] for p in data["message"]["parts"] if "data" in p)
     assert part["agent_id"] == server.derive_agent_id("a2a-test-agent", None, {})[0]
     assert part["need_id"].startswith("nd_")
+
+
+def test_serving_knowledge_is_matched(tmp_path, monkeypatch):
+    sv = tmp_path / "serving.json"
+    sv.write_text(json.dumps({"fixes": {"fix_add_verification": {"n": 7, "avg_score_delta": 18.0}},
+                              "benchmarks": {"data_lookup": {"n": 40, "median": 80,
+                                                             "deciles": [50, 60, 65, 70, 80, 82, 85, 88, 91]}}}))
+    monkeypatch.setattr(server, "SERVING_FILE", sv)
+    monkeypatch.setattr(server, "LOG_FILE", tmp_path / "c.jsonl")
+    r = server.evaluate_trace("data lookup", "action:search ok > action:fetch ok > final", "success", agent_id="m1")
+    first = r["suggestions"][0]
+    assert first["id"] == "fix_add_verification" and first["effectiveness"]["applied_n"] == 7
+    assert r["benchmark"]["n"] == 40 and r["benchmark"]["confidence"] == "medium" and "your_percentile" in r["benchmark"]
+    sv.write_text("{broken")
+    r2 = server.evaluate_trace("data lookup", "action:search ok > final", "success", agent_id="m1")
+    assert r2["benchmark"]["n"] == 0  # clean fallback
+
+
+def test_miss_is_logged_without_content(monkeypatch):
+    import io
+    buf = io.StringIO()
+    monkeypatch.setattr(server, "_CALL_STREAM", buf)
+    app, _ = server.build_http_app()
+    TestClient(app).get("/v2/evaluate?secret=abc")
+    err = buf.getvalue()
+    assert "TRACECHECK_MISS" in err and "secret=abc" not in err

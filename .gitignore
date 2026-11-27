@@ -6,3 +6,10 @@ dist/
 original/
 .pytest_cache/
 tests/.calls.jsonl
+# PRIVATE data never belongs in this public repo (event store, profiles, full knowledge base)
+tracecheck-stats.csv
+knowledge-full.json
+data/*.csv
+data/*private*
+data/profiles*
+*.events.jsonl

@@ -1,0 +1,12 @@
+{
+  "schema": "tracecheck-serving/1",
+  "generated_utc": "2026-11-27T21:21:21Z",
+  "scoring_version": "",
+  "min_n": {
+    "benchmark": 5,
+    "fix": 3
+  },
+  "fixes": {},
+  "benchmarks": {},
+  "aliases": {}
+}

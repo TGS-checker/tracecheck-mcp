@@ -426,7 +426,7 @@ def _remember(store: OrderedDict, key: str, value: dict) -> None:
 def load_serving() -> dict:
     """Public, aggregated knowledge (fix rankings, net benchmarks). Missing or broken file -> empty."""
     try:
-        mtime = SERVING_FILE.stat().st_mtime
+        mtime = (str(SERVING_FILE), SERVING_FILE.stat().st_mtime_ns, SERVING_FILE.stat().st_size)
     except OSError:
         return {}
     if _SERVING_CACHE["mtime"] != mtime:
@@ -487,9 +487,9 @@ def enrich_result(result: dict, *, goal: str, agent_id: str, optional: dict, not
     if isinstance(bench, dict) and bench.get("n"):
         b = {"goal_category": category, "median": bench.get("median"), "n": bench.get("n"),
              "confidence": _confidence(int(bench["n"]))}
-        dist = bench.get("scores_sorted")
-        if isinstance(dist, list) and dist:
-            b["your_percentile"] = int(round(100 * sum(1 for x in dist if x <= result["score"]) / len(dist)))
+        dec = bench.get("deciles")
+        if isinstance(dec, list) and len(dec) == 9:
+            b["your_percentile"] = 10 * sum(1 for x in dec if isinstance(x, (int, float)) and x <= result["score"])
         result["benchmark"] = b
     else:
         result["benchmark"] = {"goal_category": category, "n": 0, "note": "not enough comparable runs yet"}
@@ -1103,7 +1103,8 @@ def _finish(dimensions: dict, issues: list, suggestions: list, caps: list, priva
 _LOG_CLIENT_FIELDS = ("client_name", "client_version", "transport", "user_agent", "ip_hash")
 EVENT_SCHEMA_VERSION = 1
 _OWN_TEST_MARKERS = ("tracecheck-selftest", "tracecheck-smoke", "pod-fixture")
-_REVIEWER_MARKERS = ("pod-geldverdiener", "grid-station-review")
+_REVIEWER_MARKERS = ("pod-geldverdiener",)
+_CHECKER_MARKERS = ("grid-station-review", "sealkeeper")
 _CRAWLER_MARKERS = ("bot", "crawler", "spider", "scanner", "glama", "m8ven")
 
 
@@ -1113,6 +1114,8 @@ def agent_kind(agent_name: str | None, user_agent: str | None) -> str:
         return "own_test"
     if any(m in n for m in _REVIEWER_MARKERS):
         return "reviewer"
+    if any(m in n or m in ua for m in _CHECKER_MARKERS):
+        return "checker"
     if any(m in ua for m in _CRAWLER_MARKERS) and not n:
         return "crawler"
     return "agent" if (n and n != "unknown") or ua else "unknown"
@@ -1182,6 +1185,15 @@ def record_call(trace, agent_name: str, result: dict, client: dict | None = None
 
 
 
+def log_miss(reason: str, *, path: str | None = None, method: str | None = None, tool: str | None = None,
+             user_agent: str | None = None) -> None:
+    """One content-free TRACECHECK_MISS line: what an agent looked for and did not find (feeds alias suggestions)."""
+    entry = {"event_type": "miss", "ts_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+             "server_version": VERSION, "scoring_version": SCORING_VERSION, "reason": reason,
+             "path": path, "method": method, "tool": tool, "client_family": client_family(user_agent)}
+    print("TRACECHECK_MISS " + json.dumps({k: v for k, v in entry.items() if v is not None}), file=_CALL_STREAM, flush=True)
+
+
 def _did_you_mean(name: str, known: list[str]) -> str | None:
     import difflib
     hits = difflib.get_close_matches(name or "", known, n=1, cutoff=0.5)
@@ -1203,8 +1215,9 @@ def _install_unknown_tool_hint() -> None:
             hint = "Valid tools: " + ", ".join(known) + "."
             if suggestion:
                 hint += f" Did you mean {suggestion}?"
+            log_miss("unknown_tool", tool=str(name)[:40])
             raise ToolError(json.dumps(actionable_error(
-                f"Unknown tool: {name}.",
+                f"Unknown tool: {str(name)[:40]}.",
                 hint=hint,
                 reason="unknown_tool",
             ))) from exc
@@ -1673,7 +1686,8 @@ async def a2a_task(request: Request):
 @mcp.custom_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
 async def unknown_path(request: Request):
     """Host principle: never a bare 404. Point agents at the real endpoints and a working example."""
-    path = request.url.path
+    path = request.url.path[:80]
+    log_miss("unknown_path", path=path, method=request.method, user_agent=request.headers.get("user-agent"))
     return _help_json(
         request,
         f"Unknown path: {path}",
