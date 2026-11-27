@@ -31,3 +31,10 @@ def test_public_files():
 def test_registry_description_short():
     desc = json.loads((ROOT / "server.json").read_text())["description"]
     assert len(desc) <= 100
+
+
+def test_well_known_matches_registry_description():
+    desc = json.loads((ROOT / "server.json").read_text())["description"]
+    assert server.REGISTRY_DESCRIPTION == desc
+    for kw in ("self-check", "trace evaluation", "reliability score", "loop detection", "missing verification"):
+        assert kw in desc.lower() or kw in server.EVALUATE_TRACE_DESCRIPTION.lower()
