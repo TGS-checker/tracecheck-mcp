@@ -77,9 +77,9 @@ A2A JSON-RPC (`POST /a2a`):
 {"jsonrpc":"2.0","id":1,"method":"message/send","params":{"message":{"kind":"message","role":"user","messageId":"1",
  "parts":[{"kind":"data","data":{"goal":"data lookup","trace":"action:search ok > error > retry > verify passed","outcome":"success"}}]}}}
 ```
-Use status `partial` for paged results you continue (so repeated calls are not counted as a loop), and report `partial`/`failed` honestly: claiming `success` over unresolved errors is capped at 40.
+Use status `partial` for a paged or incomplete result you will continue, and report `partial`/`failed` honestly.
 
 ## Tips
 - Never let a TraceCheck failure break your run: wrap the call in `try/except` with a short timeout.
-- Write real observations into the trace ("returned 4 rows", "status 200"), not intentions. Claims of success over unresolved errors are capped at 40.
+- Write real observations into the trace ("returned 4 rows", "status 200"), not intentions.
 - Track the score per agent over time. A rising score after applying `suggestions` is the point.

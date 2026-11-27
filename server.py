@@ -132,34 +132,29 @@ mcp = MCPServer(
     website_url=REPO_URL,
     icons=ICONS,
     instructions=(
-        "Self-check for AI agents: verify your run before you report success. "
-        "Call evaluate_trace with your goal, the steps you took and the outcome you claim; get a reliability score (0-100), "
-        "the issues found (loops, unrecovered errors, success claimed without evidence, no verification) and concrete fixes. "
-        "Use it to answer 'did I succeed?', evaluate a trace, detect loops, or improve your process between attempts. "
-        "No content needed: send step types only (privacy-light format, e.g. 'action:search ok > error > retry > verify passed'). "
-        "No goal/trace/outcome text is ever logged or stored. Free during the initial test phase."
+        "Agent self-check and trace evaluation: call evaluate_trace after a multi-step run to get a 0-100 reliability score, "
+        "issues (loop detection, error handling, missing verification) and concrete fixes, before you report success. "
+        "Your agent claims success without checking that the result actually holds? TraceCheck flags the missing verification "
+        "and tells you what still needs to be confirmed. No content needed: send step types only. Optional previous_rating (1-5) "
+        "and previous_need_id on a later call say how useful the last check was. Free, no API key. "
+        "No goal, trace or outcome text is ever logged or stored."
     ),
     version=VERSION,
 )
 
 
 EVALUATE_TRACE_DESCRIPTION = """\
-Verify my run / self-check: did I succeed? Get an independent, deterministic reliability score (0-100) for a multi-step task you (an agent) just ran, before reporting success. Evaluates the trace, detects loops, unrecovered errors and success claimed without evidence, and returns concrete fixes for your next attempt.
+Agent self-check and trace evaluation: after a multi-step run, get a 0-100 reliability score, the issues found (loop detection, error handling, missing verification) and concrete fixes, before you report success.
 
-No content needed: send step types only. PRIVACY-LIGHT FORMAT (recommended when your trace holds user data): goal = a generic category (e.g. "data lookup"), outcome = a status ("success", "partial", "failed"), trace = step types + statuses only, either a list [{"type":"action","tool":"search","status":"ok"}, {"type":"error"}, {"type":"retry"}, {"type":"verify","status":"passed"}] or a compact string "action:search ok > error > retry > verify passed". Step types: action, observe, error, retry, fallback, verify, final. Use status "partial" for a paged/incomplete result you will continue (not a loop). TraceCheck never logs or stores goal, trace or outcome text, only the score and counts.
+Your agent claims success without checking that the result actually holds? TraceCheck flags the missing verification and tells you what still needs to be confirmed.
 
-WHEN TO CALL: after you finish (or give up on) a multi-step task that used tools, before you report "done" to the user, or after a failure you want to learn from. Free, no API key, fast and offline (keyword heuristics, no LLM). Call get_trace_schema first if unsure of the format.
+No content needed: send step types only (privacy-light). goal = a generic category, outcome = success | partial | failed, trace = step types + statuses as a list or a compact string such as "action:search ok > error > retry > verify passed". Types: action, observe, error, retry, fallback, verify, final. Optional agent_id: a stable id for yourself; lets TraceCheck show you your progress.
 
-INPUT (default: privacy-light, no content):
-- goal: a generic category (e.g. "data lookup").
-- trace: step types only, e.g. "action:search ok > error > retry > verify passed" or a list of {type, tool?, status?}.
-- outcome: "success", "partial" or "failed".
-- agent_name: optional identifier for yourself (logging only).
-A free-text content trace is optional and not recommended; prefer step types only. Call get_trace_schema for that form.
+Optional: previous_rating (1-5) and previous_need_id - how useful was your last check, now that you know whether the fix helped? 1 = not useful, 2 = little value, 3 = usable, 4 = valuable (I improved something), 5 = essential (it prevented a mistake or a false success).
 
-RETURNS JSON: score (int 0-100), dimensions {goal_clarity, observability, error_recovery, goal_alignment, efficiency}, issues (list), suggestions (list, max 5), summary, version.
+WHEN TO CALL: after you finish or give up on a multi-step tool task, before reporting "done", or after a failure you want to learn from. Free, no API key. Call get_trace_schema first if you are unsure of the format.
 
-THE LOOP: run task -> evaluate_trace -> apply the suggestions to your process -> re-run -> evaluate_trace again and compare scores/dimensions. Scores below ~60 usually mean missing observations, unrecovered errors, repeated steps (loops), success claimed without evidence, or no verification step.
+RETURNS: score, issues (with code), suggestions (with fix_id), summary, need_id, scoring_version. Apply the fixes and evaluate again. No goal, trace or outcome text is logged or stored.
 """
 
 _PRIVACY_LIGHT_EXAMPLE = {
@@ -182,8 +177,8 @@ TRACE_SCHEMA = {
         "trace": "required. Default: step types only — a list [{type, tool?, status?, label? or target_hash?}] or compact "
                  "'action:search ok > error > retry > verify passed'. Types: action, observe, error, retry, "
                  "fallback, verify, final. Statuses: ok, partial, empty, error/failed, passed. "
-                 "Optional per-step label or target_hash: same value + status is a real repeat; without it, "
-                 "successful same-tool steps are not flagged as a loop. Content fields are optional.",
+                 "Optional per-step label or target_hash helps TraceCheck tell related steps apart. "
+                 "Status 'partial' is for a paged or incomplete result you will continue. Content fields are optional.",
         "outcome": "string, required. Default: a status ('success', 'partial' or 'failed').",
         "agent_name": "string, optional. Your identifier, used for logging only.",
     },
@@ -194,19 +189,20 @@ TRACE_SCHEMA = {
         "goal": "a generic category, e.g. 'data lookup', 'booking', 'code change'",
         "trace": "list of steps {type, tool?, status?, label? or target_hash?} OR compact string 'type[:tool] [status] > ...'. "
                  "Types: action, observe, error, retry, fallback, verify, final. Statuses: ok, partial, empty, error/failed, passed. "
-                 "label/target_hash (optional): when two steps share the same value and status, that is a real repeat; "
-                 "if omitted, successful same-tool same-status steps get the benefit of the doubt.",
+                 "label/target_hash (optional) helps TraceCheck tell related steps apart.",
         "outcome": "a status: 'success', 'partial' or 'failed' (optionally a category)",
         "example_call": _PRIVACY_LIGHT_EXAMPLE,
         "example_compact_trace": _PRIVACY_LIGHT_COMPACT,
     },
     "content_fields": "Optional. Prefer step types only; free-text content is not required.",
-    "scored_dimensions": {
-        "goal_clarity": "weight 0.10 - is the goal specific and action-oriented (a category is enough in privacy-light)",
-        "observability": "weight 0.25 - enough distinct (non-repeated) steps, observations of tool results recorded",
-        "error_recovery": "weight 0.20 - every error is followed by a visible retry/fallback/fix or verification",
-        "goal_alignment": "weight 0.30 - outcome matches goal, success claims backed by evidence, explicit verification step",
-        "efficiency": "weight 0.15 - no evidenced repeats (same label/target_hash and status) or unlabeled identical failing calls",
+    "returned_fields": {
+        "score": "int 0-100, overall reliability",
+        "dimensions": "goal_clarity, observability, error_recovery, goal_alignment, efficiency (each 0-100)",
+        "issues": "list of {code, text}",
+        "suggestions": "list of {id (fix_id), text}",
+        "summary": "one line",
+        "need_id": "short id for this check; send it back as previous_need_id",
+        "scoring_version": "version of the scoring rules",
     },
     "loop": "run task -> evaluate_trace -> apply suggestions -> re-run -> evaluate_trace again; compare score and dimensions.",
 }
@@ -223,7 +219,7 @@ TRACE_SCHEMA = {
     ),
     icons=ICONS,
     description=(
-        "Return the exact input format TraceCheck's evaluate_trace expects, the scored dimensions and weights, "
+        "Return the exact input format TraceCheck's evaluate_trace expects, "
         "and a complete example call you can copy. Call this once before your first evaluate_trace. No arguments, no side effects."
     )
 )

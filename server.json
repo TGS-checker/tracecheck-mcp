@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.TGS-checker/tracecheck",
   "title": "TraceCheck",
-  "description": "Agent self-check: verify your run, detect loops. No content needed: send step types only.",
+  "description": "Agent self-check: trace evaluation, 0-100 reliability score, loop detection, missing verification.",
   "repository": {
     "url": "https://github.com/TGS-checker/tracecheck-mcp",
     "source": "github"

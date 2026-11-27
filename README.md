@@ -11,7 +11,7 @@
 
 Also listed in: [TensorBlock MCP Index](https://www.tensorblock.co/mcp/servers/github-tgs-checker-tracecheck-mcp-68917ff5) · [awesome-a2a](https://github.com/ai-boost/awesome-a2a)
 
-**TraceCheck is a self-check for AI agents: verify your run before you report success.** Did I succeed? Send your goal, steps and claimed outcome and get a 0-100 reliability score, the issues found (loops, unrecovered errors, success claimed without evidence, no verification) and concrete fixes. Free, hosted, no API key, deterministic (no LLM), v0.4.2.
+**TraceCheck is an agent self-check and trace evaluation service: verify your run before you report success.** Did I succeed? Send your goal, steps and claimed outcome and get a 0-100 reliability score, the issues found (loop detection, error handling, missing verification) and concrete fixes. Your agent claims success without checking that the result actually holds? TraceCheck flags the missing verification and tells you what still needs to be confirmed. Free, hosted, no API key, deterministic (no LLM), v0.4.3.
 
 **No content needed: send step types only.** TraceCheck scores the *structure* of a run (actions, errors, retries, verification, repetition), so you can send `"action:search ok > error > retry > verify passed"` with goal `"data lookup"` and outcome `"success"`. Nothing you send is logged or stored: no goal, trace or outcome text, only the score and counts (see [Privacy](#privacy-what-is-logged)).
 
@@ -64,7 +64,7 @@ curl -s -X POST https://tracecheck-mcp.onrender.com/a2a/message:send -H 'Content
 | Tool | Purpose |
 |---|---|
 | `evaluate_trace(goal, trace, outcome, agent_name?)` | Scores the trace (free text, or step types only). Returns `{score, dimensions, issues, suggestions, summary, privacy_mode, version, scoring_version}` |
-| `get_trace_schema()` | Returns the input format, dimension weights and a copyable example |
+| `get_trace_schema()` | Returns the input format and a copyable example |
 
 ## Quickstart
 ```bash
@@ -104,11 +104,11 @@ Default and recommended: **privacy-light** (no content needed). Send step types 
 Compact string form of the same trace: `"action:search ok > action:fetch_details error > retry:fetch_details ok > verify passed"` (segments `type[:tool] [status]`, separated by `>` or newlines).
 A2A: send the same object as a `data` part: `{"message":{"role":"ROLE_USER","messageId":"1","parts":[{"data":{...}}]}}`.
 - Types: `action`, `observe`, `error`, `retry`, `fallback`, `verify`, `final`. Statuses: `ok`, `partial`, `empty`, `error`/`failed`/`timeout`, `passed`/`failed` (verify).
-- A loop is an evidenced repeat (same optional `label`/`target_hash` and status) or unlabeled identical failing calls. Status `partial` is pagination, not a loop. Successful same-tool steps without a label are not flagged. Every error needs a later `retry`/`fallback`, a successful call of the same tool, or a passed `verify`. Claiming `success` over unresolved errors is capped at 40.
+- Optional per-step `label` or `target_hash` helps relate steps. Status `partial` is for a paged or incomplete result you will continue. Report `partial`/`failed` honestly.
 - Tool names are only used inside the scoring of that call. They are not logged. Use generic names if you prefer.
 - The response includes `"privacy_mode": true` when this format was detected.
 
-Content fields are optional; prefer step types only. Optional per-step `label` or `target_hash` marks a real repeat when two steps share the same value and status; without it, successful same-tool steps are not flagged as a loop.
+Content fields are optional; prefer step types only.
 
 ## Privacy: what is logged
 Since v0.4 TraceCheck stores **no content**: no goal, trace or outcome text, and no tool names. Each call writes one line (to `calls.jsonl` and, in HTTP mode, `TRACECHECK_CALL {json}` to stdout / Render logs) with only:
@@ -130,10 +130,6 @@ Since v0.4 TraceCheck stores **no content**: no goal, trace or outcome text, and
 - Icon (`assets/icon.svg`, `assets/icon.png`, also served at `/icon.svg` and `/icon.png`), `websiteUrl` and `icons` in `server.json`, `iconUrl` in the agent card, and `GET /` returns a short JSON description with links.
 
 ## What's new in v0.3
-- **Loops/redundancy:** repeated or near-identical steps are detected (new `efficiency` dimension, weight 0.15) and don't count as distinct steps. A repeat right after an error counts as a retry, and pagination (steps that differ only in numbers) is not a loop.
-- **Evidence over claims:** every error must be followed by a retry/fallback/fix or a verification. Success words in `outcome` no longer help when errors are unresolved. Instead, the score is capped at 40.
-- **Verification evidence** is rewarded (`verified`, `checked`, `tests passed`, `status 200`, ...). A missing verification step now costs points.
-- Weights: goal_clarity 0.10, observability 0.25, error_recovery 0.20, goal_alignment 0.30, efficiency 0.15. API is unchanged (`dimensions` gains `efficiency`, `version` is `0.3.0`).
-- **Call logging:** each call is appended to `calls.jsonl`, and in HTTP mode one line `TRACECHECK_CALL {json}` is printed to stdout (Render logs). In stdio mode that line goes to stderr. (v0.4: these lines no longer contain any goal text; see [Privacy](#privacy-what-is-logged).)
+- Adds an efficiency view, stronger checks on success claims and error handling, and call logging without content (see [Privacy](#privacy-what-is-logged)). API unchanged (`dimensions` gains `efficiency`).
 
 Example scores (`python examples/run_examples.py`): 01 clean 91, 02 looping 45, 03 ignored error 40, 04 vague 35, 05 error then retry 91, 06 verified with evidence 88, 07 pagination 89, 08 privacy-light steps 91.

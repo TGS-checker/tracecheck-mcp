@@ -1,6 +1,6 @@
 {
   "name": "TraceCheck",
-  "description": "Self-check for AI agents: verify your run before you report success. Send your goal, the steps you took and the outcome you claim; get a reliability score (0-100), per-dimension sub-scores, the issues found (loops, unrecovered errors, success claimed without evidence, no verification) and concrete fixes. No content needed: send step types only (privacy-light format); no goal/trace/outcome text is logged or stored. Free during test phase, no API key. Also available as an MCP server (streamable HTTP) at https://tracecheck-mcp.onrender.com/mcp with tools evaluate_trace and get_trace_schema. Summary for agents: https://tracecheck-mcp.onrender.com/llms.txt",
+  "description": "Agent self-check and trace evaluation: verify your run before you report success. Send your goal, the steps you took and the outcome you claim; get a 0-100 reliability score, issues (loop detection, error handling, missing verification) and concrete fixes. Your agent claims success without checking that the result actually holds? TraceCheck flags the missing verification and tells you what still needs to be confirmed. No content needed: send step types only. Optional agent_id (lets TraceCheck show you your progress), and previous_rating (1-5) with previous_need_id on a later call. No goal, trace or outcome text is logged or stored. Free, no API key. Also an MCP server at https://tracecheck-mcp.onrender.com/mcp (tools evaluate_trace, get_trace_schema). Summary: https://tracecheck-mcp.onrender.com/llms.txt",
   "version": "0.4.3",
   "provider": {
     "organization": "TraceCheck (test)",
@@ -36,7 +36,7 @@
     {
       "id": "evaluate_trace",
       "name": "Verify my run (evaluate agent execution trace)",
-      "description": "Self-check before reporting success: did I succeed? Score an agent's multi-step execution trace (evaluate trace, detect loops, reliability score) for reliability and return concrete improvement suggestions. No content needed: send step types only. Send POST /a2a/message:send (or JSON-RPC message/send at POST /a2a) with one message part {\"data\": {\"goal\": str, \"trace\": str | list, \"outcome\": str, \"agent_name\": str (optional)}}. Privacy-light (recommended): goal = a generic category ('data lookup'), outcome = 'success'|'partial'|'failed', trace = step types + statuses only, e.g. [{\"type\":\"action\",\"tool\":\"search\",\"status\":\"ok\"},{\"type\":\"error\"},{\"type\":\"retry\"},{\"type\":\"verify\",\"status\":\"passed\"}] or 'action:search ok > error > retry > verify passed'. Free text also works: chronological steps, one per line, with what each tool returned, errors with their recovery, and a final 'Verified:' line. Nothing you send is logged or stored, only the score and counts. Returns a Message whose data part is {score, dimensions, issues, suggestions, summary, privacy_mode, version}. Loop: run task, evaluate, apply suggestions, re-run, compare.",
+      "description": "Agent self-check: did I succeed? Evaluate a multi-step execution trace and get a 0-100 reliability score, loop detection, error handling, missing-verification flags and concrete fixes. POST /a2a/message:send (or JSON-RPC message/send at POST /a2a) with a data part {goal, trace, outcome, agent_id?, previous_rating?, previous_need_id?}. Privacy-light: goal = a generic category, outcome = success|partial|failed, trace = step types only (list or 'action:search ok > error > retry > verify passed'). agent_id (optional) lets TraceCheck show you your progress. On a later call, previous_rating 1-5 says how useful the last check was. No goal, trace or outcome text is logged or stored. Returns {score, dimensions, issues[{code,text}], suggestions[{id,text}], summary, need_id, scoring_version}.",
       "tags": [
         "self-check",
         "verify-my-run",
@@ -55,6 +55,7 @@
         "free"
       ],
       "examples": [
+        "My run claimed success but I never checked the result. Evaluate this trace and tell me what still needs to be confirmed.",
         "Verify my run before I report success.",
         "Did I succeed? Here is what I did: action:search ok > action:book error > retry:book ok > verify passed > final",
         "Self-check my trace and detect loops.",
