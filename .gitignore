@@ -13,10 +13,3 @@ data/*.csv
 data/*private*
 data/profiles*
 *.events.jsonl
-# PRIVATE scoring knowledge (tuned config + golden results) never belongs in this public repo.
-# The live service reads it from a Render Secret File; only scoring_config.fallback.json is public.
-scoring-config*.json
-scoring.json
-scoring-golden*.json
-*scoring*private*
-secrets/

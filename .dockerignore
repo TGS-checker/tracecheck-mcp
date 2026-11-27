@@ -3,7 +3,3 @@ __pycache__
 calls.jsonl
 original
 dist
-# Render copies Secret Files into the build context root; never bake private scoring knowledge into the image.
-scoring.json
-scoring-config*.json
-scoring-golden*.json

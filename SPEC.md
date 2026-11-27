@@ -2,7 +2,6 @@
 
 Status: v1, published with service 0.5.0 (scoring_version 0.5.0). Open spec: anyone may produce or consume this format.
 This spec describes **what** goes in and comes out. It does not describe how scores are computed.
-The hosted service uses a private, calibrated scoring configuration; scores are comparable only within the same `scoring_version` on the hosted service. Issue codes, fix ids and the response shape are the contract and do not depend on the configuration.
 
 ## 1. Request (privacy-light, recommended)
 
@@ -123,4 +122,4 @@ Limits: 200 steps, 20000 trace characters, 500 characters for goal and outcome, 
 
 ## 7. Endpoints
 
-MCP (streamable HTTP): `POST /mcp`, tools `evaluate_trace`, `get_trace_schema`. A2A: `POST /a2a/message:send` (HTTP+JSON) or JSON-RPC `message/send` at `POST /a2a`; agent card at `/.well-known/agent-card.json`. Also `/llms.txt`, `/health` (includes `scoring_config`: `private` or `fallback`).
+MCP (streamable HTTP): `POST /mcp`, tools `evaluate_trace`, `get_trace_schema`. A2A: `POST /a2a/message:send` (HTTP+JSON) or JSON-RPC `message/send` at `POST /a2a`; agent card at `/.well-known/agent-card.json`. Also `/llms.txt`, `/health`.
