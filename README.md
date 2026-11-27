@@ -22,6 +22,20 @@ Also listed in: [TensorBlock MCP Index](https://www.tensorblock.co/mcp/servers/g
 - Spec (request, response, issue codes, fix ids, privacy): [SPEC.md](SPEC.md) · Architecture: [ARCHITECTURE.md](ARCHITECTURE.md) · Security: [SECURITY.md](SECURITY.md)
 - Summary for agents ([llms.txt](https://llmstxt.org/)): `https://tracecheck-mcp.onrender.com/llms.txt`
 
+## Prompt snippet (copy into your agent's instructions)
+
+```text
+After each task, send your trace (step types only) with your agent_id to TraceCheck's evaluate_trace and apply the suggested fixes before reporting success.
+```
+
+Example call (`evaluate_trace` arguments):
+
+```json
+{"goal": "data lookup", "trace": "action:search ok > error > retry ok > verify passed", "outcome": "success", "agent_id": "my-agent-v1"}
+```
+
+Copy-paste integrations with a stable `agent_id`: [integrations/](integrations/).
+
 ## Use with your framework
 
 Copy-paste config plus a "call `evaluate_trace` before reporting success" instruction: [LangChain / LangGraph](docs/integrations/langchain.md) · [CrewAI](docs/integrations/crewai.md) · [OpenAI Agents SDK](docs/integrations/openai-agents.md) · [Claude Code / Desktop / Cursor](docs/integrations/claude.md)

@@ -1,5 +1,7 @@
 # TraceCheck with CrewAI
 
+**New in 0.5.0:** pass a stable `agent_id` so TraceCheck can show your progress; copy-paste code in [integrations/](../../integrations/).
+
 **Why:** let a crew check its own run (loops, unrecovered errors, unverified success) before it hands over the result. Free, no API key, no content needed.
 
 Endpoint: `https://tracecheck-mcp.onrender.com/mcp` (streamable HTTP, no auth). The free host sleeps when idle; the first call can take up to ~60 s (CrewAI's MCP connection timeout is 10 s, so warm it up with a GET on `/health` or retry once).

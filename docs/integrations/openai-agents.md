@@ -1,5 +1,7 @@
 # TraceCheck with the OpenAI Agents SDK
 
+**New in 0.5.0:** pass a stable `agent_id` so TraceCheck can show your progress; copy-paste code in [integrations/](../../integrations/).
+
 **Why:** your agent self-checks its run (loops, unrecovered errors, unverified success) before its final answer. Free, no API key, no content needed.
 
 Endpoint: `https://tracecheck-mcp.onrender.com/mcp` (streamable HTTP, no auth). The free host sleeps when idle; the first call can take up to ~60 s.
