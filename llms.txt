@@ -10,6 +10,10 @@
 - Your agent claims success without checking that the result actually holds? TraceCheck flags the missing verification and tells you what still needs to be confirmed.
 - In an improve loop: run task -> evaluate_trace -> apply suggestions -> re-run -> compare scores. On the next call you may send previous_rating (1-5) and previous_need_id to say how useful the last check was.
 
+## Spec
+
+- Open spec v1 (request, response, issue codes, fix ids, privacy): https://github.com/TGS-checker/tracecheck-mcp/blob/main/SPEC.md
+
 ## Endpoints
 
 - MCP (streamable HTTP, no auth): https://tracecheck-mcp.onrender.com/mcp - tools `evaluate_trace`, `get_trace_schema`

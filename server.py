@@ -520,15 +520,67 @@ def enrich_result(result: dict, *, goal: str, agent_id: str, optional: dict, not
     return result
 
 
+LIMITS = {"max_steps": 200, "max_trace_chars": 20000, "max_goal_chars": 500, "max_outcome_chars": 500,
+          "max_body_bytes": 262144}
+RATE_LIMIT_PER_MIN = int(os.environ.get("TRACECHECK_RATE_LIMIT_PER_MIN", "60"))
+GLOBAL_LIMIT_PER_MIN = int(os.environ.get("TRACECHECK_GLOBAL_LIMIT_PER_MIN", "1200"))
+_RATE: "OrderedDict[str, list]" = OrderedDict()
+
+
+def check_limits(goal, trace, outcome) -> dict | None:
+    """Input size limits. Too large -> a helpful error that says the limit and how to fit in it."""
+    problems = []
+    if isinstance(trace, list) and len(trace) > LIMITS["max_steps"]:
+        problems.append(f"trace has {len(trace)} steps (max {LIMITS['max_steps']})")
+    size = len(trace) if isinstance(trace, str) else len(json.dumps(trace, default=str)) if isinstance(trace, list) else 0
+    if size > LIMITS["max_trace_chars"]:
+        problems.append(f"trace is {size} characters (max {LIMITS['max_trace_chars']})")
+    if isinstance(goal, str) and len(goal) > LIMITS["max_goal_chars"]:
+        problems.append(f"goal is {len(goal)} characters (max {LIMITS['max_goal_chars']})")
+    if isinstance(outcome, str) and len(outcome) > LIMITS["max_outcome_chars"]:
+        problems.append(f"outcome is {len(outcome)} characters (max {LIMITS['max_outcome_chars']})")
+    if not problems:
+        return None
+    return actionable_error("Input too large: " + "; ".join(problems) + ".",
+                            hint="Send step types only (no content): one short step per tool call, a goal category "
+                                 "and an outcome status. Long runs: send the last 200 steps.",
+                            reason="input_too_large", limits={k: v for k, v in LIMITS.items() if k != "max_body_bytes"})
+
+
+def rate_limited(key: str, now: float | None = None) -> int:
+    """Sliding one-minute window per agent key, in memory only. Returns seconds to wait (0 = ok)."""
+    import time
+    now = now or time.monotonic()
+    hits = [t for t in _RATE.get(key, []) if now - t < 60]
+    if len(hits) >= RATE_LIMIT_PER_MIN:
+        _RATE[key] = hits
+        return max(1, int(60 - (now - hits[0])) + 1)
+    hits.append(now)
+    _RATE[key] = hits
+    _RATE.move_to_end(key)
+    while len(_RATE) > _MEMORY_MAX:
+        _RATE.popitem(last=False)
+    return 0
+
+
 def serve_evaluation(goal, trace, outcome, *, agent_name="unknown", agent_id=None, previous_rating=None,
                      previous_need_id=None, client: dict | None = None) -> dict:
     """One path for MCP and A2A: score, enrich with knowledge, log one content-free event."""
     client = client or {}
+    too_big = check_limits(goal, trace, outcome)
+    if too_big:
+        return too_big
     result = score_trace(goal, trace, outcome)
     if result.get("error"):
         return result
     optional, notes = _clean_optional(agent_id, previous_rating, previous_need_id)
     aid, aid_src = derive_agent_id(optional.get("agent_id"), str(agent_name or "unknown")[:80], client)
+    wait = rate_limited(aid)
+    if wait:
+        return actionable_error(f"Too many calls from this agent. Try again in {wait} seconds.",
+                                hint=f"Limit: {RATE_LIMIT_PER_MIN} evaluate calls per minute per agent. "
+                                     "Batch your checks: one call per finished task is enough.",
+                                reason="rate_limited", retry_after_seconds=wait)
     prev_known = aid in _AGENT_LAST
     result = enrich_result(result, goal=goal, agent_id=aid, optional=optional, notes=notes)
     record_call(trace, agent_name, result, client, extra={
@@ -1926,6 +1978,55 @@ class ClientInfoSniffer:
         await self.app(scope, replay, send)
 
 
+class BodyLimitAndGlobalRate:
+    """Reject oversized bodies (413) and global floods (429) with helpful JSON. In memory, no IPs."""
+
+    def __init__(self, app):
+        self.app = app
+        self.window: list = []
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        import time
+        now = time.monotonic()
+        self.window = [t for t in self.window if now - t < 60]
+        reason = None
+        if len(self.window) >= GLOBAL_LIMIT_PER_MIN:
+            status, reason, msg = 429, "rate_limited", "Service is busy. Try again in a minute."
+        else:
+            self.window.append(now)
+            headers = {k.decode("latin1").lower(): v.decode("latin1") for k, v in (scope.get("headers") or [])}
+            try:
+                length = int(headers.get("content-length") or 0)
+            except ValueError:
+                length = 0
+            if length > LIMITS["max_body_bytes"]:
+                status, reason = 413, "body_too_large"
+                msg = f"Request body is {length} bytes (max {LIMITS['max_body_bytes']})."
+        if reason:
+            body = actionable_error(msg, hint="Send step types only (no content), one short step per tool call.",
+                                    base=_scope_base(scope), reason=reason)
+            raw = json.dumps(body).encode()
+            hdrs = [(b"content-type", b"application/json"), (b"content-length", str(len(raw)).encode())]
+            if status == 429:
+                hdrs.append((b"retry-after", b"60"))
+            await send({"type": "http.response.start", "status": status, "headers": hdrs})
+            await send({"type": "http.response.body", "body": raw})
+            return
+        received = 0
+
+        async def limited_receive():
+            nonlocal received
+            message = await receive()
+            if message.get("type") == "http.request":
+                received += len(message.get("body") or b"")
+                if received > LIMITS["max_body_bytes"]:
+                    raise ValueError("request body too large")
+            return message
+        return await self.app(scope, limited_receive, send)
+
+
 def build_http_app():
     from mcp.server.transport_security import TransportSecuritySettings
     from starlette.middleware.cors import CORSMiddleware
@@ -1942,6 +2043,7 @@ def build_http_app():
     app.add_middleware(ClientInfoSniffer)
     app.add_middleware(McpRejectLogger)
     app.add_middleware(McpGetHelp)
+    app.add_middleware(BodyLimitAndGlobalRate)
     from starlette.exceptions import HTTPException
 
     async def _http_exception_handler(request, exc):
