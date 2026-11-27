@@ -1,0 +1,41 @@
+{
+  "trace_id": "pod-20261127-2",
+  "goal": "media production",
+  "trace": [
+    {
+      "type": "action",
+      "tool": "read",
+      "status": "ok"
+    },
+    {
+      "type": "action",
+      "tool": "render",
+      "status": "ok"
+    },
+    {
+      "type": "observe",
+      "status": "ok"
+    },
+    {
+      "type": "action",
+      "tool": "check",
+      "status": "ok"
+    },
+    {
+      "type": "action",
+      "tool": "check",
+      "status": "ok"
+    },
+    {
+      "type": "action",
+      "tool": "handoff",
+      "status": "ok"
+    },
+    {
+      "type": "final",
+      "status": "ok"
+    }
+  ],
+  "outcome": "partial",
+  "agent_name": "pod-fixture"
+}

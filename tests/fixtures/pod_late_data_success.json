@@ -1,0 +1,55 @@
+{
+  "trace_id": "pod-20261127-3",
+  "goal": "performance analysis",
+  "trace": [
+    {
+      "type": "action",
+      "tool": "fetch",
+      "status": "ok"
+    },
+    {
+      "type": "observe",
+      "status": "ok"
+    },
+    {
+      "type": "action",
+      "tool": "fetch",
+      "status": "empty"
+    },
+    {
+      "type": "fallback",
+      "tool": "request",
+      "status": "ok"
+    },
+    {
+      "type": "observe",
+      "status": "partial"
+    },
+    {
+      "type": "action",
+      "tool": "write",
+      "status": "ok"
+    },
+    {
+      "type": "retry",
+      "tool": "fetch",
+      "status": "ok"
+    },
+    {
+      "type": "action",
+      "tool": "write",
+      "status": "ok"
+    },
+    {
+      "type": "action",
+      "tool": "write",
+      "status": "ok"
+    },
+    {
+      "type": "final",
+      "status": "ok"
+    }
+  ],
+  "outcome": "success",
+  "agent_name": "pod-fixture"
+}

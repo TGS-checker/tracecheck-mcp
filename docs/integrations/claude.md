@@ -4,7 +4,7 @@
 
 **Why:** give your coding or desktop agent a one-call self-check (loops, unrecovered errors, unverified success) before it says "done". Free, no API key, no content needed.
 
-Endpoint: `https://tracecheck-mcp.onrender.com/mcp` (streamable HTTP, no auth). The free host sleeps when idle; the first call can take up to ~60 s.
+Endpoint: `https://tracecheck-mcp.onrender.com/mcp` (streamable HTTP, no auth). The host is always on (no cold start).
 
 ## Claude Code
 

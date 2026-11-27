@@ -1,7 +1,7 @@
 # TraceCheck self-check: score your agent's run at the end
 
 Call TraceCheck once at the end of a multi-step run, log the score, and feed `suggestions` into the next run.
-Free, no API key. The free host sleeps when idle, so allow up to about 60 s for the first call.
+Free, no API key. The host is always on, so the first call answers right away.
 
 Input: `goal` (the task), `trace` (chronological steps, one per line: tool called, what it returned, errors **and** the retry/fallback, and a final `Verified: ...` line), `outcome` (what you reported), `agent_name` (optional, shows up in our usage count).
 Output: `{score 0-100, dimensions, issues, suggestions, summary, privacy_mode, version}`.

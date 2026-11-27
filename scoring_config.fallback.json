@@ -1,5 +1,5 @@
 {
- "config_version": 1,
+ "config_version": 2,
  "note": "PUBLIC generic fallback. Coarse, round values so the service works out of the box. The live service runs a private, tuned configuration; scores from this fallback are not comparable to live scores.",
  "weights": {
   "goal_clarity": 0.2,
@@ -13,7 +13,10 @@
   "loop_min_redundant": 3,
   "loop_min_ratio": 0.5,
   "ungrounded_success": 50,
-  "incomplete_data": 60
+  "incomplete_data": 60,
+  "ungrounded_high_stakes": 30,
+  "handoff_before_verification": 80,
+  "open_observation": 70
  },
  "efficiency": {
   "full": 100,
@@ -58,7 +61,16 @@
   "align_kind_mismatch_bonus": 10,
   "align_verify_passed_bonus": 20,
   "align_verify_failed_penalty": 10,
-  "align_no_verify_penalty": 10
+  "align_no_verify_penalty": 10,
+  "err_none": 100,
+  "err_gap_unclosed_penalty": 20,
+  "err_gap_closed_bonus": 0,
+  "obs_bare_max_steps": 3,
+  "obs_no_observe_penalty": 10,
+  "align_handoff_penalty": 10,
+  "align_open_observation_penalty": 20,
+  "align_write_early_penalty": 10,
+  "align_partial_no_handover_penalty": 10
  },
  "text": {
   "near_dup_similarity": 1.0,
@@ -88,7 +100,13 @@
   "outcome_min_len": 10,
   "outcome_vague_penalty": 20,
   "align_verify_bonus": 20,
-  "align_no_verify_penalty": 10
+  "align_no_verify_penalty": 10,
+  "err_none": 100,
+  "err_gap_unclosed_penalty": 20,
+  "align_handoff_penalty": 10,
+  "align_open_observation_penalty": 20,
+  "align_write_early_penalty": 10,
+  "align_partial_no_handover_penalty": 10
  },
  "statuses": {
   "error": [
@@ -162,9 +180,57 @@
    "partial",
    "fail",
    "not "
+  ],
+  "handoff_tools": [
+   "handoff",
+   "approval"
+  ],
+  "handover_tools": [
+   "schedule",
+   "ticket"
+  ],
+  "write_tools": [
+   "write",
+   "save"
+  ],
+  "partial_outcome": [
+   "partial"
+  ],
+  "failed_outcome": [
+   "fail"
+  ],
+  "incomplete_text": [
+   "partial",
+   "incomplete"
+  ],
+  "handoff_text": [
+   "handoff",
+   "approval"
+  ],
+  "final_text": [
+   "final answer"
+  ],
+  "resolution_text": [
+   "resolved",
+   "confirmed"
+  ],
+  "write_text": [
+   "saved"
+  ],
+  "handover_text": [
+   "scheduled",
+   "ticket"
   ]
  },
  "goal_categories": {
+  "scheduled_work": [
+   "batch",
+   "scheduled"
+  ],
+  "media": [
+   "video",
+   "media"
+  ],
   "data_lookup": [
    "search",
    "lookup",
@@ -181,7 +247,8 @@
   ],
   "purchase": [
    "buy",
-   "purchase"
+   "purchase",
+   "pay"
   ],
   "messaging": [
    "message",
@@ -242,6 +309,18 @@
    "api",
    "script",
    "visual"
+  ],
+  "scheduled_work": [
+   "script",
+   "api",
+   "test",
+   "end_to_end",
+   "human"
+  ],
+  "media": [
+   "visual",
+   "human",
+   "end_to_end"
   ]
  }
 }

@@ -1,0 +1,36 @@
+{
+  "trace_id": "pod-20261127-1",
+  "goal": "scheduled batch work",
+  "trace": [
+    {
+      "type": "action",
+      "tool": "read",
+      "status": "ok"
+    },
+    {
+      "type": "observe",
+      "status": "ok"
+    },
+    {
+      "type": "action",
+      "tool": "check",
+      "status": "ok"
+    },
+    {
+      "type": "action",
+      "tool": "write",
+      "status": "ok"
+    },
+    {
+      "type": "action",
+      "tool": "write",
+      "status": "ok"
+    },
+    {
+      "type": "final",
+      "status": "ok"
+    }
+  ],
+  "outcome": "partial",
+  "agent_name": "pod-fixture"
+}

@@ -195,6 +195,8 @@ def analyse(events: list[dict], weekly: bool = False) -> tuple[dict, dict]:
         for a, b in zip(runs, runs[1:]):
             if a.get("scoring_version") != b.get("scoring_version"):
                 continue
+            if (a.get("goal_category") or "other") != (b.get("goal_category") or "other"):
+                continue  # 0.5.1: never compare score deltas across different goal types
             gone = set(_codes(a["issue_codes"])) - set(_codes(b["issue_codes"]))
             delta = _num(b["score"]) - _num(a["score"])
             for fid in _codes(a["fix_ids"]):

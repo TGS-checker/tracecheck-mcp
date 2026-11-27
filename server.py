@@ -3,6 +3,9 @@ TraceCheck MCP Server
 A minimal agent-first service for independent evaluation of agent execution traces.
 Helps agents improve their own processes by providing objective feedback.
 
+v0.5.1: order and open-end codes (handoff_before_verification, unresolved_partial_observation,
+write_before_complete_data, partial_outcome_without_handover), step type handoff, result fixes start with the
+goal-specific check, error recovery not applicable without errors, progress compares score_delta per goal type only.
 v0.5.0: issue codes + fix ids (codes are the contract), host reasons, optional agent_id / previous_rating /
 previous_need_id, need_id, progress, benchmark + measured fix effectiveness from data/serving.json, content-free
 event schema, POD scoring points (incomplete data, verify_kind, requirement_lowered, stakes, responsive sub-scores).
@@ -56,8 +59,8 @@ except OSError:  # e.g. installed via uvx/pip on a machine without /workspace
     LOG_FILE = Path.home() / ".tracecheck" / "calls.jsonl"
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-VERSION = "0.5.0"
-SCORING_VERSION = "0.5.0"  # POD points 1-6: incomplete data, verify_kind, requirement_lowered, stakes, responsive sub-scores
+VERSION = "0.5.1"
+SCORING_VERSION = "0.5.1"  # POD batch 2026-11-27: order/open-end codes, goal-specific fixes, recovery calibration
 # stdout carries JSON-RPC in stdio mode, so call lines go to stdout only in HTTP mode (set in main()).
 _CALL_STREAM = sys.stderr
 
@@ -75,23 +78,43 @@ _SCORING_SECTIONS = ("weights", "caps", "efficiency", "steps", "text", "statuses
 
 
 def _config_shape_errors(cfg, ref) -> list:
-    """Key names (never values) that are missing or wrong-typed compared to the public fallback."""
+    """Key names (never values) of whole sections that are missing or wrong-typed. Such a config is unusable."""
     if not isinstance(cfg, dict):
         return ["<root>"]
-    errs = []
-    for top in list(_SCORING_SECTIONS) + ["goal_categories", "verify_fit"]:
-        if not isinstance(cfg.get(top), dict):
-            errs.append(top)
-            continue
-        if top in _SCORING_SECTIONS:
-            errs += [f"{top}.{k}" for k in ref[top] if k not in cfg[top]]
-    return errs
+    return [top for top in list(_SCORING_SECTIONS) + ["goal_categories", "verify_fit"] if not isinstance(cfg.get(top), dict)]
+
+
+def _fill_missing_keys(cfg: dict, ref: dict) -> list:
+    """Fill keys that a (older) private config lacks with the public fallback value, in place.
+
+    This lets new code run on an older private config without breaking live scoring: only the new keys
+    use coarse fallback values. Returns the filled key names (never values). New goal categories are put
+    first, because they are more specific than the older ones."""
+    filled = []
+    for top in _SCORING_SECTIONS:
+        for k, v in ref[top].items():
+            if k not in cfg[top]:
+                cfg[top][k] = v
+                filled.append(f"{top}.{k}")
+    new_cats = {k: v for k, v in ref["goal_categories"].items() if k not in cfg["goal_categories"]}
+    if new_cats:
+        cfg["goal_categories"] = {**new_cats, **cfg["goal_categories"]}
+        filled += [f"goal_categories.{k}" for k in new_cats]
+    for k, v in ref["verify_fit"].items():
+        if k not in cfg["verify_fit"]:
+            cfg["verify_fit"][k] = v
+            filled.append(f"verify_fit.{k}")
+    return filled
+
+
+SCORING_CONFIG_FILLED: list = []  # key names filled from the fallback (complete private config -> empty)
 
 
 def load_scoring_config(env=None) -> tuple[dict, str]:
     """Return (config, source) with source 'private' or 'fallback'. Never logs values."""
     env = os.environ if env is None else env
     fallback = json.loads(SCORING_CONFIG_FALLBACK_FILE.read_text(encoding="utf-8"))
+    SCORING_CONFIG_FILLED.clear()
     candidates = []
     path = (env.get("TRACECHECK_SCORING_CONFIG_PATH") or "").strip()
     if path:
@@ -120,6 +143,11 @@ def load_scoring_config(env=None) -> tuple[dict, str]:
         if missing:
             logger.warning("scoring_config_error=%s_incomplete keys=%s", kind, ",".join(missing[:20]))
             continue
+        filled = _fill_missing_keys(cfg, fallback)
+        if filled:
+            SCORING_CONFIG_FILLED.extend(filled)
+            logger.warning("scoring_config_partial=%s filled_from_fallback=%d keys=%s", kind, len(filled),
+                           ",".join(filled[:40]))
         return cfg, "private"
     return fallback, "fallback"
 
@@ -226,7 +254,7 @@ Agent self-check and trace evaluation: after a multi-step run, get a 0-100 relia
 
 Your agent claims success without checking that the result actually holds? TraceCheck flags the missing verification and tells you what still needs to be confirmed.
 
-No content needed: send step types only (privacy-light). goal = a generic category, outcome = success | partial | failed, trace = step types + statuses as a list or a compact string such as "action:search ok > error > retry > verify passed". Types: action, observe, error, retry, fallback, verify, final. Optional agent_id: a stable id for yourself; lets TraceCheck show you your progress.
+No content needed: send step types only (privacy-light). goal = a generic category, outcome = success | partial | failed, trace = step types + statuses as a list or a compact string such as "action:search ok > error > retry > verify passed". Types: action, observe, error, retry, fallback, verify, final, handoff. Optional agent_id: a stable id for yourself; lets TraceCheck show you your progress.
 
 Optional: previous_rating (1-5) and previous_need_id - how useful was your last check, now that you know whether the fix helped? 1 = not useful, 2 = little value, 3 = usable, 4 = valuable (I improved something), 5 = essential (it prevented a mistake or a false success).
 
@@ -254,7 +282,7 @@ TRACE_SCHEMA = {
         "goal": "string, required. Default (privacy-light): a generic category, e.g. 'data lookup'.",
         "trace": "required. Default: step types only — a list [{type, tool?, status?, label? or target_hash?}] or compact "
                  "'action:search ok > error > retry > verify passed'. Types: action, observe, error, retry, "
-                 "fallback, verify, final. Statuses: ok, partial, empty, error/failed, passed. "
+                 "fallback, verify, final, handoff. Statuses: ok, partial, empty, error/failed, passed. "
                  "Optional per-step label or target_hash helps TraceCheck tell related steps apart. "
                  "Status 'partial' is for a paged or incomplete result you will continue. Content fields are optional.",
         "outcome": "string, required. Default: a status ('success', 'partial' or 'failed').",
@@ -270,7 +298,7 @@ TRACE_SCHEMA = {
         "note": "Default and recommended. No content needed: send step types only. Nothing you send is logged or stored (only score + counts).",
         "goal": "a generic category, e.g. 'data lookup', 'booking', 'code change'",
         "trace": "list of steps {type, tool?, status?, label? or target_hash?} OR compact string 'type[:tool] [status] > ...'. "
-                 "Types: action, observe, error, retry, fallback, verify, final. Statuses: ok, partial, empty, error/failed, passed. "
+                 "Types: action, observe, error, retry, fallback, verify, final, handoff. Statuses: ok, partial, empty, error/failed, passed. "
                  "label/target_hash (optional) helps TraceCheck tell related steps apart.",
         "outcome": "a status: 'success', 'partial' or 'failed' (optionally a category)",
         "example_call": _PRIVACY_LIGHT_EXAMPLE,
@@ -555,18 +583,31 @@ def enrich_result(result: dict, *, goal: str, agent_id: str, optional: dict, not
         result["benchmark"] = b
     else:
         result["benchmark"] = {"goal_category": category, "n": 0, "note": "not enough comparable runs yet"}
-    prev = None
+    # Progress: only from this server's short-lived memory, keyed by need_id or agent_id (no stored profiles).
+    prev, lost = None, False
     if optional.get("previous_need_id"):
         prev = _NEED_MEMORY.get(optional["previous_need_id"])
+        lost = prev is None
     if prev is None:
         prev = _AGENT_LAST.get(agent_id)
     if prev and prev.get("agent_id") == agent_id:
-        result["progress"] = {
+        same = prev.get("category") == category
+        progress = {
+            "previous_need_id": prev.get("need_id"),
             "previous_score": prev["score"],
-            "score_delta": result["score"] - prev["score"],
+            "same_goal_category": same,
+            "score_delta": (result["score"] - prev["score"]) if same else None,
             "resolved": [c for c in prev["codes"] if c not in codes],
+            "still_open": [c for c in codes if c in prev["codes"]],
             "new": [c for c in codes if c not in prev["codes"]],
         }
+        if not same:
+            progress["not_compared"] = (f"score_delta not compared: the previous check was for goal category "
+                                        f"'{prev.get('category')}', this one is '{category}'. Compare runs of the same goal type.")
+        result["progress"] = progress
+    elif lost:
+        result["progress"] = {"note": "previous_need_id not found: checks are kept in memory for a limited time. "
+                                      "Send this response's need_id next time."}
     extra_cases = [t for uc, t in LIVE_USE_CASES.items() if _UC_TRIGGER.get(uc) not in codes]
     if extra_cases:
         result["also_useful_for"] = extra_cases[0]
@@ -579,7 +620,7 @@ def enrich_result(result: dict, *, goal: str, agent_id: str, optional: dict, not
         result["rating_received"] = optional["previous_rating"]
     if notes:
         result["notes"] = notes
-    mem = {"agent_id": agent_id, "score": result["score"], "codes": codes, "category": category}
+    mem = {"agent_id": agent_id, "score": result["score"], "codes": codes, "category": category, "need_id": need_id}
     _remember(_NEED_MEMORY, need_id, mem)
     _remember(_AGENT_LAST, agent_id, mem)
     return result
@@ -727,6 +768,8 @@ _STEP_TYPES = {
     # v0.4.1: a closing/hand-off step (e.g. '... > final'). Neutral marker: not an action, error or verification.
     "final": "final", "done": "final", "finish": "final", "end": "final", "answer": "final", "report": "final",
     "respond": "final", "reply": "final",
+    # 0.5.1: handing work or a decision to a person or another agent (approval request, escalation).
+    "handoff": "handoff", "handover": "handoff", "hand_off": "handoff", "escalate": "handoff",
 }
 _ERROR_STATUSES = set(SC["statuses"]["error"])
 _PASS_STATUSES = set(SC["statuses"]["pass"])
@@ -758,6 +801,15 @@ ISSUES = {
     "requirement_lowered": ("A fallback succeeded only by dropping or replacing a requirement of the goal.",
                             "fix_restore_or_confirm_requirement"),
     "verify_kind_mismatch": ("A verification is present, but its kind does not fit the goal.", "fix_choose_verify_kind"),
+    # 0.5.1: order and open ends
+    "handoff_before_verification": ("A hand-off, approval request or final report came before the result was verified.",
+                                    "fix_verify_before_handoff"),
+    "unresolved_partial_observation": ("Success was claimed while an observation with partial or empty data was never resolved.",
+                                       "fix_resolve_open_observation"),
+    "write_before_complete_data": ("Results were written while the data they depend on was still incomplete.",
+                                   "fix_wait_for_complete_data"),
+    "partial_outcome_without_handover": ("The outcome is partial, but no hand-over or scheduling of the remaining work is visible.",
+                                         "fix_hand_over_remaining_work"),
 }
 FIXES = {
     "fix_add_goal_category": "Send a generic goal category, such as 'data lookup', 'booking' or 'code change'.",
@@ -773,17 +825,19 @@ FIXES = {
                          "Do not rely on a failed result in later steps.",
     "fix_add_outcome_status": "Send an outcome status: success, partial or failed.",
     "fix_clarify_outcome": "Describe the concrete result and state how it satisfies the goal.",
-    "fix_report_honest_outcome": "Only report success when the last verification passed. "
-                                 "Otherwise report partial or failed, and state what is still open.",
-    "fix_add_verification": "End with a verify step, for example {'type':'verify','status':'passed'}. "
-                            "Say what you confirmed, in terms of the goal.",
-    "fix_specify_verification": "Keep your verify step, and make it specific: state which result you confirmed against the goal.",
-    "fix_report_incomplete": "Report partial or failed when a retry still returns partial or empty data. "
-                             "Do not claim success until the needed result is complete.",
-    "fix_restore_or_confirm_requirement": "Do not treat this as a full success. Restore the original requirement, "
-                                          "or get confirmation that the lower option is acceptable, and say which requirement changed.",
-    "fix_choose_verify_kind": "Do not add another generic verify step. Use a verification kind that fits the goal "
+    "fix_report_honest_outcome": "Only report success when that check passed; otherwise report partial or failed and state what is still open.",
+    "fix_add_verification": "Record that check as a verify step, for example {'type':'verify','status':'passed'}, before you report success.",
+    "fix_specify_verification": "Keep your verify step, and state which result you confirmed against the goal.",
+    "fix_report_incomplete": "Until that check passes on complete data, report partial or failed, even when a retry returned some data.",
+    "fix_restore_or_confirm_requirement": "Restore the original requirement, or get confirmation that the lower option is acceptable, "
+                                          "and say which requirement changed.",
+    "fix_choose_verify_kind": "Use a verification kind that fits this goal instead of another generic verify step, "
                               "and state what you confirmed.",
+    "fix_verify_before_handoff": "Do this before you hand off, ask for approval or report, or say in the hand-off which check is still open.",
+    "fix_resolve_open_observation": "Resolve the partial or empty data point first (re-check it or get the missing value), "
+                                    "or report partial and name the open point.",
+    "fix_wait_for_complete_data": "Write results only after the data is complete; if you wrote early, re-check or rewrite them once the data is in.",
+    "fix_hand_over_remaining_work": "Name the remaining work and hand it over or schedule it (a handoff step), so it is not lost.",
 }
 
 
@@ -851,7 +905,7 @@ def _parse_steps(trace) -> list | None:
 
 
 def _is_error_step(st: dict) -> bool:
-    if st["type"] == "final":  # 'final failed' reports the outcome; it is not a new error to recover from
+    if st["type"] in ("final", "handoff"):  # 'final failed' reports the outcome; it is not a new error to recover from
         return False
     return st["type"] == "error" or (st["status"] in _ERROR_STATUSES)
 
@@ -882,7 +936,7 @@ def _count_identical_repeats(steps: list) -> tuple[int, dict]:
                 for t in last_status:
                     progress_since[t] = True
             continue
-        if typ in ("verify", "final"):
+        if typ in ("verify", "final", "handoff"):
             for t in last_status:
                 progress_since[t] = True
             continue
@@ -919,8 +973,14 @@ WHAT_TO_VERIFY = {
     "file_ops": "Open the resulting file and confirm its content and format.",
     "content": "Open the produced output and confirm it matches the requested content and format.",
     "research": "Check the key claims against their sources.",
-    "other": "Confirm the final result meets the goal.",
+    "scheduled_work": "Confirm each scheduled item ran, and list which items are still open or deferred.",
+    "media": "Play or open the rendered output and check timing, audio and format against the brief.",
+    "other": "Name the concrete result the goal asked for and confirm it exists and is complete.",
 }
+# Fixes about the result itself start with the goal-specific check (what_to_verify), never with a generic step.
+GOAL_FIXES = ("fix_add_verification", "fix_specify_verification", "fix_choose_verify_kind", "fix_report_honest_outcome",
+              "fix_report_incomplete", "fix_restore_or_confirm_requirement", "fix_verify_before_handoff",
+              "fix_resolve_open_observation", "fix_wait_for_complete_data", "fix_hand_over_remaining_work")
 
 
 def _incomplete_before_claim(steps: list) -> bool:
@@ -935,6 +995,68 @@ def _incomplete_before_claim(steps: list) -> bool:
             if not any(s["type"] == "verify" and s["status"] in _PASS_STATUSES for s in later):
                 return True
     return False
+
+
+def _tool_has(st: dict, key: str) -> bool:
+    return bool(st.get("tool")) and any(w in st["tool"] for w in SC["words"][key])
+
+
+def _is_handoff(st: dict) -> bool:
+    return st["type"] == "handoff" or (st["type"] in ("action", "final") and _tool_has(st, "handoff_tools"))
+
+
+def _outcome_kind(outcome_l: str, claims_success: bool) -> str:
+    if claims_success:
+        return "success"
+    if any(w in outcome_l for w in SC["words"]["partial_outcome"]):
+        return "partial"
+    if any(w in outcome_l for w in SC["words"]["failed_outcome"]):
+        return "failed"
+    return "other"
+
+
+def _order_and_open_ends(steps: list, outcome_kind: str) -> list:
+    """0.5.1 order and open-end issues on a privacy-light trace. Returns issue codes in a fixed order."""
+    found = []
+    ok = lambda st: (st.get("status") or "ok") in _PASS_STATUSES  # noqa: E731
+    passed_at = [i for i, st in enumerate(steps) if st["type"] == "verify" and (st["status"] in _PASS_STATUSES or st["status"] is None)]
+    verify_at = [i for i, st in enumerate(steps) if st["type"] == "verify"]
+    if outcome_kind != "failed":
+        early_handoff = any(_is_handoff(st) and (not passed_at or i < passed_at[0]) for i, st in enumerate(steps))
+        early_final = bool(verify_at) and any(st["type"] == "final" and i < verify_at[-1] for i, st in enumerate(steps))
+        if early_handoff or early_final:
+            found.append("handoff_before_verification")
+    if outcome_kind == "success":
+        for i, st in enumerate(steps):
+            if st["type"] == "observe" and st["status"] in _INCOMPLETE_STATUSES:
+                later = steps[i + 1:]
+                if not any((s2["type"] == "observe" and s2["status"] in _PASS_STATUSES)
+                           or (s2["type"] == "verify" and s2["status"] in _PASS_STATUSES) for s2 in later):
+                    found.append("unresolved_partial_observation")
+                    break
+    open_data: set = set()
+    for st in steps:
+        typ, tool, status = st["type"], st.get("tool"), st.get("status")
+        if typ in ("action", "retry", "fallback") and tool and _tool_has(st, "write_tools") and open_data - {tool}:
+            found.append("write_before_complete_data")
+            break
+        if typ == "observe":
+            if status in _INCOMPLETE_STATUSES:
+                open_data.add("<observe>")
+            elif status in _PASS_STATUSES:
+                open_data.discard("<observe>")
+        elif typ == "verify" and status in _PASS_STATUSES:
+            open_data.clear()
+        elif typ in ("action", "retry", "fallback") and tool:
+            if status in _INCOMPLETE_STATUSES:
+                open_data.add(tool)
+            elif ok(st):
+                open_data.discard(tool)
+                if typ == "fallback":
+                    open_data -= {t for t in open_data if t != "<observe>"}
+    if outcome_kind == "partial" and not any(_is_handoff(st) or _tool_has(st, "handover_tools") for st in steps):
+        found.append("partial_outcome_without_handover")
+    return found
 
 
 def score_steps(goal: str, steps: list, outcome: str) -> dict:
@@ -963,6 +1085,8 @@ def score_steps(goal: str, steps: list, outcome: str) -> dict:
         _flag(issues, suggestions, "too_few_steps")
     if any(s["type"] == "observe" for s in steps):
         obs += _ST["obs_observe_bonus"]
+    elif distinct <= _ST["obs_bare_max_steps"]:
+        obs -= _ST["obs_no_observe_penalty"]  # a bare trace without any observation says little
     actions = [s for s in steps if s["type"] == "action"]
     with_status = sum(1 for s in actions if s["status"]) + sum(1 for s in steps if s["type"] == "observe")
     if actions and with_status >= _ST["obs_status_share"] * len(actions):
@@ -985,32 +1109,55 @@ def score_steps(goal: str, steps: list, outcome: str) -> dict:
 
     # 4. Error recovery: each error must be followed by retry/fallback, a successful action, or a passed verify
     # (a later successful action only resolves errors of that same tool; moving on to another tool does not).
+    # 0.5.1: an empty/incomplete result is a gap; a retry or fallback should close it. No errors and no gaps:
+    # error recovery is not applicable and does not count in the overall score.
     errors, pending, last_tool, lowered = 0, [], None, False
+    gaps: dict = {}  # tool -> "open" | "retried" | "closed"
     for st in steps:
+        typ, status = st["type"], st["status"] or "ok"
         if _is_error_step(st):
             errors += 1
             pending.append((st["tool"] or last_tool, st.get("stakes", "normal")))
         elif st.get("requirement_lowered"):
             lowered = True  # a fallback that drops a requirement is not a recovery
             pending = [p for p in pending if p[0] != st["tool"]] if st["tool"] else pending[:-1]
-        elif st["type"] in ("retry", "fallback") or (st["type"] == "verify" and st["status"] in _PASS_STATUSES):
+        elif typ in ("retry", "fallback") or (typ == "verify" and st["status"] in _PASS_STATUSES):
             pending = []
-        elif st["type"] in ("action", "observe") and st["tool"]:
+        elif typ in ("action", "observe") and st["tool"]:
             pending = [p for p in pending if p[0] != st["tool"]]
+        if typ in ("action", "retry", "fallback") and st["tool"]:
+            t = st["tool"]
+            incomplete = status in _INCOMPLETE_STATUSES and (status not in _CONTINUE_STATUSES or typ != "action")
+            if incomplete:
+                gaps[t] = "retried" if (typ in ("retry", "fallback") and t in gaps) else gaps.get(t, "open")
+            elif t in gaps and gaps[t] != "closed" and status in _PASS_STATUSES:
+                gaps[t] = "closed"
+            if typ == "fallback" and status in _PASS_STATUSES and not st.get("requirement_lowered"):
+                for g in gaps:
+                    if gaps[g] != "closed":
+                        gaps[g] = "closed"
         if st["tool"]:
             last_tool = st["tool"]
     unresolved = len(pending)
     high_stakes = any(p[1] == "high" for p in pending)
+    unclosed = sum(1 for v in gaps.values() if v == "retried")
+    closed = sum(1 for v in gaps.values() if v == "closed")
+    not_applicable = []
     err = _ST["err_base"]
-    if unresolved:
+    if not errors and not gaps and not lowered:
+        err = _ST["err_none"]
+        not_applicable.append("error_recovery")
+    elif unresolved:
         err -= _ST["err_unresolved_penalty"] + _ST["err_unresolved_extra"] * (unresolved - 1)
         if high_stakes:
             err -= _ST["err_high_stakes_penalty"]
         elif all(p[1] == "low" for p in pending):
             err += _ST["err_low_stakes_bonus"]
         _flag(issues, suggestions, "unrecovered_error", **({"stakes": "high"} if high_stakes else {}))
-    elif errors and not lowered:
-        err += _ST["err_recovered_bonus"]
+    elif (errors or closed) and not lowered and not unclosed:
+        err += _ST["err_recovered_bonus"] + (_ST["err_gap_closed_bonus"] if closed else 0)
+    if unclosed:
+        err -= _ST["err_gap_unclosed_penalty"] * unclosed  # a retry that did not close the gap
     if lowered:
         err -= _ST["err_lowered_penalty"]
         _flag(issues, suggestions, "requirement_lowered")
@@ -1033,6 +1180,8 @@ def score_steps(goal: str, steps: list, outcome: str) -> dict:
         align -= _ST["align_ungrounded_penalty"] + (_ST["align_ungrounded_high_stakes_extra"] if high_stakes else 0)
         _flag(issues, suggestions, "ungrounded_success")
         caps.append((_CAPS["ungrounded_success"], "success claimed over unresolved errors"))
+        if high_stakes:
+            caps.append((_CAPS["ungrounded_high_stakes"], "success claimed over an unresolved high-stakes failure"))
     elif claims_success and incomplete:
         align -= _ST["align_incomplete_penalty"]
         _flag(issues, suggestions, "conclusion_on_incomplete_data")
@@ -1042,6 +1191,7 @@ def score_steps(goal: str, steps: list, outcome: str) -> dict:
     if claims_success and lowered:
         align -= _ST["align_lowered_success_penalty"]
     what = WHAT_TO_VERIFY.get(category, WHAT_TO_VERIFY["other"])
+    order_codes = _order_and_open_ends(steps, _outcome_kind(outcome_l, claims_success))
     kinds = [s.get("verify_kind") for s in verifies if s.get("verify_kind")]
     fits = GOAL_VERIFY_FIT.get(category)
     if passed and kinds and fits and not any(k in fits for k in kinds):
@@ -1057,8 +1207,29 @@ def score_steps(goal: str, steps: list, outcome: str) -> dict:
     else:
         align -= _ST["align_no_verify_penalty"]
         _flag(issues, suggestions, "missing_verification", what_to_verify=what)
+    align -= _apply_order_codes(order_codes, issues, suggestions, caps, what, _ST)
     dimensions["goal_alignment"] = max(0, min(100, align))
-    return _finish(dimensions, issues, suggestions, caps, privacy_mode=True)
+    return _finish(dimensions, issues, suggestions, caps, privacy_mode=True, category=category,
+                   not_applicable=not_applicable)
+
+
+_ORDER_PENALTY_KEYS = {"handoff_before_verification": "align_handoff_penalty",
+                       "unresolved_partial_observation": "align_open_observation_penalty",
+                       "write_before_complete_data": "align_write_early_penalty",
+                       "partial_outcome_without_handover": "align_partial_no_handover_penalty"}
+_ORDER_CAP_KEYS = {"handoff_before_verification": "handoff_before_verification",
+                   "unresolved_partial_observation": "open_observation"}
+
+
+def _apply_order_codes(codes: list, issues: list, suggestions: list, caps: list, what: str, table: dict) -> int:
+    """Flag 0.5.1 order/open-end codes; return the goal-alignment penalty."""
+    penalty = 0
+    for code in codes:
+        _flag(issues, suggestions, code, what_to_verify=what)
+        penalty += table[_ORDER_PENALTY_KEYS[code]]
+        if code in _ORDER_CAP_KEYS:
+            caps.append((_CAPS[_ORDER_CAP_KEYS[code]], code))
+    return penalty
 
 
 def score_trace(goal: str, trace, outcome: str) -> dict:
@@ -1138,12 +1309,20 @@ def score_text_trace(goal: str, trace: str, outcome: str) -> dict:
 
     # 4. Error handling & recovery (per-error: is it followed by a retry/fix/verification?)
     error_count, unresolved = _unresolved_errors(lines)
+    words = SC["words"]
+    # 0.5.1: a retry or fallback that still reports incomplete data did not close the gap.
+    unclosed = sum(1 for l in lines if _has(l.lower(), _RECOVERY_WORDS) and _has(l.lower(), words["incomplete_text"]))
+    not_applicable = []
     err_score = _TX["err_base"]
-    if unresolved:
+    if not error_count and not unclosed:
+        err_score = _TX["err_none"]
+        not_applicable.append("error_recovery")
+    elif unresolved:
         err_score -= _TX["err_unresolved_penalty"] + _TX["err_unresolved_extra"] * (unresolved - 1)
         _flag(issues, suggestions, "unrecovered_error")
-    elif error_count:
+    elif error_count and not unclosed:
         err_score += _TX["err_recovered_bonus"]
+    err_score -= _TX["err_gap_unclosed_penalty"] * unclosed
     dimensions["error_recovery"] = max(0, min(100, err_score))
 
     # 5. Goal–outcome alignment: evidence over claims
@@ -1162,30 +1341,69 @@ def score_text_trace(goal: str, trace: str, outcome: str) -> dict:
     if not outcome or len(outcome.strip()) < _TX["outcome_min_len"]:
         align_score -= _TX["outcome_vague_penalty"]
         _flag(issues, suggestions, "outcome_vague")
+    category = goal_category(goal_l)
+    what = WHAT_TO_VERIFY.get(category, WHAT_TO_VERIFY["other"])
     if any(w in trace_l for w in _VERIFY_WORDS):
         align_score += _TX["align_verify_bonus"]
     else:
         align_score -= _TX["align_no_verify_penalty"]
-        _flag(issues, suggestions, "missing_verification")
+        _flag(issues, suggestions, "missing_verification", what_to_verify=what)
+    kind = ("partial" if _has(outcome_l, words["partial_outcome"]) else "success" if claims_success
+            else "failed" if _has(outcome_l, words["failed_outcome"]) else "other")
+    align_score -= _apply_order_codes(_text_order_and_open_ends(lines, kind), issues, suggestions, caps, what, _TX)
     dimensions["goal_alignment"] = max(0, min(100, align_score))
 
-    return _finish(dimensions, issues, suggestions, caps, privacy_mode=False)
+    return _finish(dimensions, issues, suggestions, caps, privacy_mode=False, category=category,
+                   not_applicable=not_applicable)
 
 
-_VERIFY_FIXES = ("fix_add_verification", "fix_specify_verification", "fix_choose_verify_kind")
+def _text_order_and_open_ends(lines: list, outcome_kind: str) -> list:
+    """0.5.1 order and open-end issues on a free-text trace (same codes as the step format)."""
+    w = SC["words"]
+    low = [l.lower() for l in lines]
+    verify_at = [i for i, l in enumerate(low) if _has(l, _VERIFY_WORDS)]
+    found = []
+    if outcome_kind != "failed":
+        early_handoff = any(_has(l, w["handoff_text"]) and (not verify_at or i < verify_at[0]) for i, l in enumerate(low))
+        early_final = bool(verify_at) and any(_has(l, w["final_text"]) and i < verify_at[-1] for i, l in enumerate(low))
+        if early_handoff or early_final:
+            found.append("handoff_before_verification")
+    if outcome_kind == "success":
+        for i, l in enumerate(low):
+            if _has(l, w["observation"]) and _has(l, w["incomplete_text"]):
+                if not any(_has(l2, _VERIFY_WORDS) or _has(l2, w["resolution_text"]) for l2 in low[i + 1:]):
+                    found.append("unresolved_partial_observation")
+                    break
+    open_data = False
+    for l in low:
+        if _has(l, w["write_text"]) and open_data:
+            found.append("write_before_complete_data")
+            break
+        if _has(l, w["incomplete_text"]):
+            open_data = True
+        elif _has(l, w["resolution_text"]) or _has(l, _VERIFY_WORDS):
+            open_data = False
+    if outcome_kind == "partial" and not any(_has(l, w["handover_text"]) or _has(l, w["handoff_text"]) for l in low):
+        found.append("partial_outcome_without_handover")
+    return found
 
 
-def _finish(dimensions: dict, issues: list, suggestions: list, caps: list, privacy_mode: bool) -> dict:
-    # 6. Overall score (weighted), then critical-flaw caps
-    weights = _W
-    score = int(max(0, min(100, round(sum(dimensions[k] * weights[k] for k in weights)))))
+def _finish(dimensions: dict, issues: list, suggestions: list, caps: list, privacy_mode: bool,
+            category: str = "other", not_applicable: list | None = None) -> dict:
+    # 6. Overall score (weighted over the applicable dimensions), then critical-flaw caps
+    not_applicable = not_applicable or []
+    weights = {k: v for k, v in _W.items() if k not in not_applicable}
+    total = sum(weights.values()) or 1.0
+    score = int(max(0, min(100, round(sum(dimensions[k] * weights[k] for k in weights) / total))))
     for cap, _reason in caps:
         score = min(score, cap)
 
     issues_out = [{"code": i["code"], "text": ISSUES[i["code"]][0],
                    **{k: v for k, v in i.items() if k != "code"}} for i in issues[:5]]
-    what = next((i["what_to_verify"] for i in issues if i.get("what_to_verify")), None)
-    suggestions_out = [{"id": f, "text": FIXES[f], **({"what_to_verify": what} if what and f in _VERIFY_FIXES else {})}
+    what = WHAT_TO_VERIFY.get(category, WHAT_TO_VERIFY["other"])
+    # Result fixes start with what to check for this goal type, then the general fix.
+    suggestions_out = [{"id": f, "text": (f"{what} {FIXES[f]}" if f in GOAL_FIXES else FIXES[f]),
+                        **({"what_to_verify": what} if f in GOAL_FIXES else {})}
                        for f in suggestions[:5]]
     summary = (
         f"TraceCheck score: {score}/100. "
@@ -1202,6 +1420,7 @@ def _finish(dimensions: dict, issues: list, suggestions: list, caps: list, priva
         "issues_truncated": len(issues) > 5,
         "summary": summary,
         "dimensions": dimensions,
+        **({"not_applicable": not_applicable} if not_applicable else {}),
         "privacy_mode": privacy_mode,
         "version": VERSION,
         "scoring_version": SCORING_VERSION,
@@ -1405,7 +1624,8 @@ async def agent_card_legacy(request: Request):
 @mcp.custom_route("/health", methods=["GET"])
 async def health(request: Request):
     return JSONResponse({"status": "ok", "service": "tracecheck", "version": VERSION, "scoring_version": SCORING_VERSION,
-                         "scoring_config": SCORING_CONFIG_SOURCE})
+                         "scoring_config": SCORING_CONFIG_SOURCE,
+                         "scoring_config_complete": SCORING_CONFIG_SOURCE == "private" and not SCORING_CONFIG_FILLED})
 
 
 @mcp.custom_route("/a2a/health", methods=["GET"])

@@ -49,4 +49,4 @@ GitHub account and repo (public), Render account, `mcp-publisher login github` +
 ## Later (not needed for the first calls)
 - PyPI `tracecheck-mcp` (the name is free as of today) so `uvx tracecheck-mcp` works. Add `packages[]` to `server.json` (the `mcp-name:` token is already in the README).
 - Persistent logging (free Postgres on Render expires after 30 days; a cheap option is an external log sink).
-- Paid always-on hosting ($7/mo on Render) once cold starts get in the way.
+- Paid always-on hosting (Render Starter, $7/mo): live since 2026-11-27, no cold starts; the keepalive workflow was removed.

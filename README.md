@@ -11,7 +11,7 @@
 
 Also listed in: [TensorBlock MCP Index](https://www.tensorblock.co/mcp/servers/github-tgs-checker-tracecheck-mcp-68917ff5) · [awesome-a2a](https://github.com/ai-boost/awesome-a2a)
 
-**TraceCheck is an agent self-check and trace evaluation service: verify your run before you report success.** Did I succeed? Send your goal, steps and claimed outcome and get a 0-100 reliability score, the issues found (loop detection, error handling, missing verification) and concrete fixes. Your agent claims success without checking that the result actually holds? TraceCheck flags the missing verification and tells you what still needs to be confirmed. Free, hosted, no API key, deterministic (no LLM), v0.5.0.
+**TraceCheck is an agent self-check and trace evaluation service: verify your run before you report success.** Did I succeed? Send your goal, steps and claimed outcome and get a 0-100 reliability score, the issues found (loop detection, error handling, missing verification) and concrete fixes. Your agent claims success without checking that the result actually holds? TraceCheck flags the missing verification and tells you what still needs to be confirmed. Free, hosted, no API key, deterministic (no LLM), v0.5.1.
 
 **No content needed: send step types only.** TraceCheck scores the *structure* of a run (actions, errors, retries, verification, repetition), so you can send `"action:search ok > error > retry > verify passed"` with goal `"data lookup"` and outcome `"success"`. Nothing you send is logged or stored: no goal, trace or outcome text, only the score and counts (see [Privacy](#privacy-what-is-logged)).
 
@@ -54,7 +54,7 @@ Claude Desktop: add it under Settings › Connectors › Add custom connector wi
 ```json
 { "mcpServers": { "tracecheck": { "command": "npx", "args": ["-y", "mcp-remote", "https://tracecheck-mcp.onrender.com/mcp"] } } }
 ```
-The free host sleeps when idle, so the first call can take up to about a minute.
+The host is always on (no cold start).
 
 ## Example (real output from the live server)
 ```bash
@@ -70,7 +70,7 @@ curl -s -X POST https://tracecheck-mcp.onrender.com/a2a/message:send -H 'Content
              {"code": "ungrounded_success", "text": "..."}, {"code": "missing_verification", "text": "...", "what_to_verify": "..."}],
   "suggestions": [{"id": "fix_record_observations", "text": "..."}, {"id": "fix_recover_error", "text": "..."},
                   {"id": "fix_report_honest_outcome", "text": "..."}, {"id": "fix_add_verification", "text": "..."}],
-  "summary": "TraceCheck score: 40/100. ...", "need_id": "nd_...", "version": "0.5.0", "scoring_version": "0.5.0" }
+  "summary": "TraceCheck score: 40/100. ...", "need_id": "nd_...", "version": "0.5.1", "scoring_version": "0.5.1" }
 ```
 
 **For agents:** after a multi-step task, send `goal` + `trace` + `outcome`. You get back a score from 0 to 100, five sub-scores (goal_clarity, observability, error_recovery, goal_alignment, efficiency), the issues found and up to 5 concrete fixes.
@@ -124,7 +124,7 @@ Default and recommended: **privacy-light** (no content needed). Send step types 
 ```
 Compact string form of the same trace: `"action:search ok > action:fetch_details error > retry:fetch_details ok > verify passed"` (segments `type[:tool] [status]`, separated by `>` or newlines).
 A2A: send the same object as a `data` part: `{"message":{"role":"ROLE_USER","messageId":"1","parts":[{"data":{...}}]}}`.
-- Types: `action`, `observe`, `error`, `retry`, `fallback`, `verify`, `final`. Statuses: `ok`, `partial`, `empty`, `error`/`failed`/`timeout`, `passed`/`failed` (verify).
+- Types: `action`, `observe`, `error`, `retry`, `fallback`, `verify`, `final`, `handoff` (approval request or escalation). Statuses: `ok`, `partial`, `empty`, `error`/`failed`/`timeout`, `passed`/`failed` (verify).
 - Optional per-step `label` or `target_hash` helps relate steps. Status `partial` is for a paged or incomplete result you will continue. Report `partial`/`failed` honestly.
 - Tool names are only used inside the scoring of that call. They are not logged. Use generic names if you prefer.
 - The response includes `"privacy_mode": true` when this format was detected.
@@ -135,6 +135,15 @@ Content fields are optional; prefer step types only.
 Since v0.4 TraceCheck stores **no content**: no goal, trace or outcome text, and no tool names. Each call writes one line (to `calls.jsonl` and, in HTTP mode, `TRACECHECK_CALL {json}` to stdout / Render logs) with only:
 `timestamp, version, agent_name, score, dimensions, issue_count, trace_length` (characters, or number of steps), `privacy_mode, client_name, client_version, transport, user_agent, ip_hash`.
 `agent_name` is whatever you choose to send (optional). The IP is never stored, only `sha256(TRACECHECK_IP_SALT:ip)[:16]`. Scoring is deterministic and offline: your input is not sent anywhere else.
+
+## What's new in v0.5.1
+
+- New issue codes for order and open ends: `handoff_before_verification`, `unresolved_partial_observation`, `write_before_complete_data`, `partial_outcome_without_handover` (see SPEC.md).
+- New step type `handoff` (approval request, escalation). New goal types: scheduled batch work and media production.
+- Fixes about the result now start with the concrete check for your goal type, never with a generic step.
+- `error_recovery` is listed in `not_applicable` and does not count when a run had no errors or gaps.
+- `progress` lists `resolved`, `still_open` and `new` codes; `score_delta` is only compared between checks of the same goal type.
+- Always-on hosting: no cold start on the first call.
 
 ## What's new in v0.5.0
 
@@ -161,4 +170,4 @@ Since v0.4 TraceCheck stores **no content**: no goal, trace or outcome text, and
 ## What's new in v0.3
 - Adds an efficiency view, stronger checks on success claims and error handling, and call logging without content (see [Privacy](#privacy-what-is-logged)). API unchanged (`dimensions` gains `efficiency`).
 
-Example scores on the hosted service (`python examples/run_examples.py` gives other numbers locally, see [Scoring configuration](#scoring-configuration)): 01 clean 91, 02 looping 45, 03 ignored error 40, 04 vague 35, 05 error then retry 91, 06 verified with evidence 88, 07 pagination 89, 08 privacy-light steps 91.
+Example scores on the hosted service (`python examples/run_examples.py` gives other numbers locally, see [Scoring configuration](#scoring-configuration)): 01 clean 91, 02 looping 45, 03 ignored error 40, 04 vague 25, 05 error then retry 91, 06 verified with evidence 88, 07 pagination 93, 08 privacy-light steps 91.

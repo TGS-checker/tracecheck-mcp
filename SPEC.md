@@ -1,6 +1,6 @@
 # TraceCheck trace format and response spec — v1
 
-Status: v1, published with service 0.5.0 (scoring_version 0.5.0). Open spec: anyone may produce or consume this format.
+Status: v1.1, published with service 0.5.1 (scoring_version 0.5.1). Open spec: anyone may produce or consume this format.
 This spec describes **what** goes in and comes out. It does not describe how scores are computed.
 The hosted service uses a private, calibrated scoring configuration; scores are comparable only within the same `scoring_version` on the hosted service. Issue codes, fix ids and the response shape are the contract and do not depend on the configuration.
 
@@ -8,7 +8,7 @@ The hosted service uses a private, calibrated scoring configuration; scores are 
 
 | field | type | required | meaning |
 |---|---|---|---|
-| `goal` | string (max 500) | yes | A generic goal category, e.g. `data lookup`, `booking`, `code change`. |
+| `goal` | string (max 500) | yes | A generic goal category, e.g. `data lookup`, `booking`, `code change`, `scheduled batch work`, `media production`. |
 | `trace` | list of steps (max 200) or compact string (max 20000 chars) | yes | What you did, as step types. |
 | `outcome` | string (max 500) | yes | `success`, `partial` or `failed`. |
 | `agent_id` | string, 1-64 chars `[A-Za-z0-9._:@/-]` | no | A stable id for yourself. Lets TraceCheck show you your progress. |
@@ -18,7 +18,7 @@ The hosted service uses a private, calibrated scoring configuration; scores are 
 
 Step object: `{type, tool?, status?, label?, target_hash?, stakes?, verify_kind?, requirement_lowered?}`
 
-- `type`: `action`, `observe`, `error`, `retry`, `fallback`, `verify`, `final`.
+- `type`: `action`, `observe`, `error`, `retry`, `fallback`, `verify`, `final`, `handoff` (since 0.5.1: work or a decision handed to a person or another agent, such as an approval request or escalation).
 - `status`: `ok`, `partial`, `empty`, `error`/`failed`/`timeout`, `passed`.
 - `label` / `target_hash` (optional): helps relate steps that target the same thing.
 - `stakes` (optional): `low`, `normal`, `high`.
@@ -37,12 +37,13 @@ A free-text trace is also accepted, but not recommended. Input may be in any lan
 |---|---|
 | `score` | int 0-100, overall reliability of the run. |
 | `dimensions` | `goal_clarity`, `observability`, `error_recovery`, `goal_alignment`, `efficiency` (each 0-100). |
+| `not_applicable` | Dimensions that do not apply to this run and do not count in `score` (since 0.5.1: `error_recovery` when the run had no errors and no empty or partial results). Omitted when empty. |
 | `issues[]` | `{code, text, stakes?, what_to_verify?}`. `code` is the contract; `text` is a short explanation. |
 | `issues_truncated` | `true` when more than 5 issues were found and the list was cut. |
-| `suggestions[]` | `{id, text, what_to_verify?, effectiveness}`. `id` is a `fix_id`. Ranked by measured effect when known. |
+| `suggestions[]` | `{id, text, what_to_verify?, effectiveness}`. `id` is a `fix_id`. Ranked by measured effect when known. Fixes about the result start with the check for your goal type (`what_to_verify`), then the fix text from section 3. |
 | `suggestions[].effectiveness` | `{applied_n, avg_score_delta, confidence}` measured across agents, or `{applied_n: 0, note}` for a default fix. |
 | `benchmark` | `{goal_category, median, your_percentile, n, confidence}` from net data (other real agents only), or `{n: 0, note}` when there is not enough data. |
-| `progress` | When you return: `{previous_score, score_delta, resolved[], new[]}`. |
+| `progress` | When you return: `{previous_need_id, previous_score, same_goal_category, score_delta, resolved[], still_open[], new[]}`. `score_delta` is only given when the goal category is the same as in the previous check; otherwise it is `null` and `not_compared` says why. Progress comes from short-lived server memory (by `previous_need_id` or `agent_id`); an unknown `previous_need_id` gives `{note}`. |
 | `need_id` | Short id for this check. Send it back as `previous_need_id`. |
 | `agent_id` | Your pseudonymous id as TraceCheck sees it. |
 | `rating_request` | One line asking for an optional `previous_rating` on your next call. |
@@ -71,6 +72,10 @@ A free-text trace is also accepted, but not recommended. Input may be in any lan
 | `conclusion_on_incomplete_data` | Success was claimed after a step still returned partial or empty data. | `fix_report_incomplete` |
 | `requirement_lowered` | A fallback succeeded only by dropping or replacing a requirement of the goal. | `fix_restore_or_confirm_requirement` |
 | `verify_kind_mismatch` | A verification is present, but its kind does not fit the goal. | `fix_choose_verify_kind` |
+| `handoff_before_verification` | A hand-off, approval request or final report came before the result was verified. | `fix_verify_before_handoff` |
+| `unresolved_partial_observation` | Success was claimed while an observation with partial or empty data was never resolved. | `fix_resolve_open_observation` |
+| `write_before_complete_data` | Results were written while the data they depend on was still incomplete. | `fix_wait_for_complete_data` |
+| `partial_outcome_without_handover` | The outcome is partial, but no hand-over or scheduling of the remaining work is visible. | `fix_hand_over_remaining_work` |
 
 | fix_id | text |
 |---|---|
@@ -85,12 +90,18 @@ A free-text trace is also accepted, but not recommended. Input may be in any lan
 | `fix_recover_error` | When a step fails, add a retry or fallback (with its status) before you continue. Do not rely on a failed result in later steps. |
 | `fix_add_outcome_status` | Send an outcome status: success, partial or failed. |
 | `fix_clarify_outcome` | Describe the concrete result and state how it satisfies the goal. |
-| `fix_report_honest_outcome` | Only report success when the last verification passed. Otherwise report partial or failed, and state what is still open. |
-| `fix_add_verification` | End with a verify step, for example {'type':'verify','status':'passed'}. Say what you confirmed, in terms of the goal. |
-| `fix_specify_verification` | Keep your verify step, and make it specific: state which result you confirmed against the goal. |
-| `fix_report_incomplete` | Report partial or failed when a retry still returns partial or empty data. Do not claim success until the needed result is complete. |
-| `fix_restore_or_confirm_requirement` | Do not treat this as a full success. Restore the original requirement, or get confirmation that the lower option is acceptable, and say which requirement changed. |
-| `fix_choose_verify_kind` | Do not add another generic verify step. Use a verification kind that fits the goal and state what you confirmed. |
+| `fix_report_honest_outcome` | <check for your goal type> Only report success when that check passed; otherwise report partial or failed and state what is still open. |
+| `fix_add_verification` | <check for your goal type> Record that check as a verify step, for example {'type':'verify','status':'passed'}, before you report success. |
+| `fix_specify_verification` | <check for your goal type> Keep your verify step, and state which result you confirmed against the goal. |
+| `fix_report_incomplete` | <check for your goal type> Until that check passes on complete data, report partial or failed, even when a retry returned some data. |
+| `fix_restore_or_confirm_requirement` | <check for your goal type> Restore the original requirement, or get confirmation that the lower option is acceptable, and say which requirement changed. |
+| `fix_choose_verify_kind` | <check for your goal type> Use a verification kind that fits this goal instead of another generic verify step, and state what you confirmed. |
+| `fix_verify_before_handoff` | <check for your goal type> Do this before you hand off, ask for approval or report, or say in the hand-off which check is still open. |
+| `fix_resolve_open_observation` | <check for your goal type> Resolve the partial or empty data point first (re-check it or get the missing value), or report partial and name the open point. |
+| `fix_wait_for_complete_data` | <check for your goal type> Write results only after the data is complete; if you wrote early, re-check or rewrite them once the data is in. |
+| `fix_hand_over_remaining_work` | <check for your goal type> Name the remaining work and hand it over or schedule it (a handoff step), so it is not lost. |
+
+`<check for your goal type>` is the `what_to_verify` sentence for the goal category of the call, for example "Confirm the payment or order status with the provider." for a purchase.
 
 ## 4. Error responses (host reasons)
 
@@ -112,7 +123,8 @@ Limits: 200 steps, 20000 trace characters, 500 characters for goal and outcome, 
 | code | since | status |
 |---|---|---|
 | all codes in section 3 except the three below | 0.5.0 (first emitted as codes) | active |
-| `conclusion_on_incomplete_data`, `requirement_lowered`, `verify_kind_mismatch` | 0.5.0 | active (new) |
+| `conclusion_on_incomplete_data`, `requirement_lowered`, `verify_kind_mismatch` | 0.5.0 | active |
+| `handoff_before_verification`, `unresolved_partial_observation`, `write_before_complete_data`, `partial_outcome_without_handover` (fixes `fix_verify_before_handoff`, `fix_resolve_open_observation`, `fix_wait_for_complete_data`, `fix_hand_over_remaining_work`) | 0.5.1 | active (new) |
 
 ## 6. Privacy
 
@@ -123,4 +135,4 @@ Limits: 200 steps, 20000 trace characters, 500 characters for goal and outcome, 
 
 ## 7. Endpoints
 
-MCP (streamable HTTP): `POST /mcp`, tools `evaluate_trace`, `get_trace_schema`. A2A: `POST /a2a/message:send` (HTTP+JSON) or JSON-RPC `message/send` at `POST /a2a`; agent card at `/.well-known/agent-card.json`. Also `/llms.txt`, `/health` (includes `scoring_config`: `private` or `fallback`).
+MCP (streamable HTTP): `POST /mcp`, tools `evaluate_trace`, `get_trace_schema`. A2A: `POST /a2a/message:send` (HTTP+JSON) or JSON-RPC `message/send` at `POST /a2a`; agent card at `/.well-known/agent-card.json`. Also `/llms.txt`, `/health` (includes `scoring_config`: `private` or `fallback`, and `scoring_config_complete`).

@@ -40,7 +40,7 @@ Arguments for `evaluate_trace` (or the `data` part of an A2A message):
  "agent_name": "my-agent"}
 ```
 
-Step types: action, observe, error, retry, fallback, verify, final. Statuses: ok, partial, empty, error/failed, passed.
+Step types: action, observe, error, retry, fallback, verify, final, handoff. Statuses: ok, partial, empty, error/failed, passed.
 Optional per-step label or target_hash helps TraceCheck tell related steps apart. Status "partial" is for a paged or incomplete result you will continue. Prefer step types only; no goal, trace or outcome text is logged or stored.
 goal = a generic category, outcome = success | partial | failed.
 
@@ -66,7 +66,7 @@ Content fields are optional; prefer the privacy-light example above (step types 
 
 - Free during the test phase, no API key, no auth.
 - Privacy: no goal, trace or outcome text is logged or stored; only the score and counts.
-- The free host sleeps when idle: the first call can take up to a minute.
+- Always-on host: no cold start, calls answer right away.
 
 ## Docs
 

@@ -4,7 +4,7 @@
 
 **Why:** your agent self-checks its run (loops, unrecovered errors, unverified success) before its final answer. Free, no API key, no content needed.
 
-Endpoint: `https://tracecheck-mcp.onrender.com/mcp` (streamable HTTP, no auth). The free host sleeps when idle; the first call can take up to ~60 s.
+Endpoint: `https://tracecheck-mcp.onrender.com/mcp` (streamable HTTP, no auth). The host is always on (no cold start).
 
 Source for both options: [OpenAI Agents SDK, MCP](https://openai.github.io/openai-agents-python/mcp/) (checked 2026-11-23).
 
@@ -36,7 +36,7 @@ from agents.mcp import MCPServerStreamableHttp
 
 async with MCPServerStreamableHttp(
     name="tracecheck",
-    params={"url": "https://tracecheck-mcp.onrender.com/mcp", "timeout": 60},  # allow for a cold start
+    params={"url": "https://tracecheck-mcp.onrender.com/mcp", "timeout": 30},
     cache_tools_list=True,
     max_retry_attempts=2,
 ) as tracecheck:

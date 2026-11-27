@@ -19,6 +19,11 @@ Prepared 2026-11-27 for the 0.5.0 scoring work. These are **fixtures and expecte
 | `pod_verify_kind.json` | `pod-2026-11-27-verify-kind` | Points 2 and 6: verify present, kind does not fit; fix must be specific |
 | `pod_requirement_lowered.json` | `pod-2026-11-27-requirement-lowered` | Point 3: fallback lowers a requirement, must not be rewarded as recovery |
 | `pod_high_stakes.json` | `pod-2026-11-27-high-stakes` | Point 5 (and 4): high-stakes unrecovered error; sub-scores should move |
+| `pod_scheduled_partial.json` | `pod-20261127-1` | 0.5.1: scheduled batch work, partial outcome, no hand-over of the remaining work |
+| `pod_media_handoff.json` | `pod-20261127-2` | 0.5.1: media production, approval hand-off before any verification |
+| `pod_late_data_success.json` | `pod-20261127-3` | 0.5.1: success claimed with an unresolved partial observation and a write before the data was complete; fallback and retry did recover the fetch |
+
+The three `pod-20261127-*` files are the POD evening batch of 2026-11-27 (privacy-light, as sent). Regression tests: `tests/test_scoring_051.py`.
 
 Each JSON has a sidecar `*.md` with the expected behaviour.
 
