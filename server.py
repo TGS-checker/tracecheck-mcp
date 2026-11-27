@@ -64,6 +64,62 @@ _CALL_STREAM = sys.stderr
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("tracecheck")
 
+# --- Scoring configuration ---------------------------------------------------------
+# The scoring code is open; the tuned scoring knowledge (weights, caps, thresholds, word and
+# status lists) is private. Load order: TRACECHECK_SCORING_CONFIG_PATH (a secret file), then
+# TRACECHECK_SCORING_CONFIG (JSON string), then the public fallback in this repo. The public
+# fallback is generic and coarse: it works and gives sensible scores, but it is not the tuned
+# configuration that runs live. Only the source is ever logged or exposed, never values.
+SCORING_CONFIG_FALLBACK_FILE = Path(__file__).with_name("scoring_config.fallback.json")
+_SCORING_SECTIONS = ("weights", "caps", "efficiency", "steps", "text", "statuses", "words")
+
+
+def _config_shape_errors(cfg, ref) -> list:
+    """Key names (never values) that are missing or wrong-typed compared to the public fallback."""
+    if not isinstance(cfg, dict):
+        return ["<root>"]
+    errs = []
+    for top in list(_SCORING_SECTIONS) + ["goal_categories", "verify_fit"]:
+        if not isinstance(cfg.get(top), dict):
+            errs.append(top)
+            continue
+        if top in _SCORING_SECTIONS:
+            errs += [f"{top}.{k}" for k in ref[top] if k not in cfg[top]]
+    return errs
+
+
+def load_scoring_config(env=None) -> tuple[dict, str]:
+    """Return (config, source) with source 'private' or 'fallback'. Never logs values."""
+    env = os.environ if env is None else env
+    fallback = json.loads(SCORING_CONFIG_FALLBACK_FILE.read_text(encoding="utf-8"))
+    candidates = []
+    path = (env.get("TRACECHECK_SCORING_CONFIG_PATH") or "").strip()
+    if path:
+        try:
+            candidates.append(("path", Path(path).read_text(encoding="utf-8")))
+        except OSError:
+            logger.warning("scoring_config_error=path_unreadable")
+    raw = (env.get("TRACECHECK_SCORING_CONFIG") or "").strip()
+    if raw:
+        candidates.append(("env", raw))
+    for kind, text in candidates:
+        try:
+            cfg = json.loads(text)
+        except ValueError:
+            logger.warning("scoring_config_error=%s_invalid_json", kind)
+            continue
+        missing = _config_shape_errors(cfg, fallback)
+        if missing:
+            logger.warning("scoring_config_error=%s_incomplete keys=%s", kind, ",".join(missing[:20]))
+            continue
+        return cfg, "private"
+    return fallback, "fallback"
+
+
+SC, SCORING_CONFIG_SOURCE = load_scoring_config()
+logger.info("scoring_config=%s", SCORING_CONFIG_SOURCE)
+_W, _CAPS, _EFF, _ST, _TX = SC["weights"], SC["caps"], SC["efficiency"], SC["steps"], SC["text"]
+
 REPO_URL = "https://github.com/TGS-checker/tracecheck-mcp"
 LIVE_URL = "https://tracecheck-mcp.onrender.com"
 
@@ -246,15 +302,11 @@ def get_trace_schema() -> dict:
 
 
 # --- v0.3 heuristics helpers -------------------------------------------------
-_ERROR_WORDS = ["error", "failed", "failure", "exception", "timeout", "timed out", "404", "500", "could not",
-                "unable", "denied", "not found", "invalid", "crash"]
-_NEGATED_ERRORS = ["no error", "no errors", "0 errors", "zero errors", "without error", "without errors",
-                   "error-free", "no failures", "0 failed", "0 failures", "not failed"]
-_RECOVERY_WORDS = ["retry", "retried", "tried again", "re-ran", "reran", "rerun", "alternative", "fallback",
-                   "instead", "recovered", "fixed", "workaround", "switched to", "resolved"]
-_VERIFY_WORDS = ["verified", "verify", "checked", "confirmed against", "matches goal", "validated", "test passed",
-                 "tests passed", "status 200", "200 ok", "assert", "double-checked", "cross-checked"]
-_SUCCESS_WORDS = ["success", "completed", "done", "confirmed", "booked", "created", "sent", "found"]
+_ERROR_WORDS = list(SC["words"]["error"])
+_NEGATED_ERRORS = list(SC["words"]["negated_errors"])
+_RECOVERY_WORDS = list(SC["words"]["recovery"])
+_VERIFY_WORDS = list(SC["words"]["verify"])
+_SUCCESS_WORDS = list(SC["words"]["success_text"])
 _STEP_PREFIX = re.compile(r"^\s*(?:step\s*)?\d+\s*[.):-]\s*|^\s*[-*]\s*", re.I)
 
 
@@ -274,8 +326,8 @@ def _tokens(line: str) -> list:
 
 def _find_redundant(lines: list) -> tuple:
     """Return (redundant_count, most_repeated_step, repeat_count).
-    A step is redundant if it repeats (exactly or near: token Jaccard >= 0.8, differing in more than just
-    numbers) an earlier step. Repeating the step right after an error is a retry and is allowed (max 2 in a row)."""
+    A step is redundant if it repeats an earlier step exactly or nearly. Repeating a step right after an error
+    counts as a retry, within a limit."""
     seen, redundant, counts, retry_run = [], 0, {}, 0
     prev_error = False
     for line in lines:
@@ -290,11 +342,11 @@ def _find_redundant(lines: list) -> tuple:
                 break
             union = tset | prev_set
             diff = tset ^ prev_set
-            if union and len(tset & prev_set) / len(union) >= 0.8 and any(not t.isdigit() for t in diff):
+            if union and len(tset & prev_set) / len(union) >= _TX["near_dup_similarity"] and any(not t.isdigit() for t in diff):
                 dup_of = prev_key
                 break
         if dup_of is not None:
-            if prev_error and retry_run < 2:
+            if prev_error and retry_run < _TX["max_retry_run"]:
                 retry_run += 1  # legitimate retry after a failure
             else:
                 redundant += 1
@@ -378,16 +430,7 @@ _AGENT_ID_RE = re.compile(r"^[A-Za-z0-9._:@/-]{1,64}$")
 _NEED_ID_RE = re.compile(r"^nd_[0-9a-f]{10}$")
 RATING_SCALE = {1: "not useful", 2: "little value", 3: "usable", 4: "valuable: improved something",
                 5: "essential: prevented an error or a false success claim"}
-GOAL_CATEGORIES = {
-    "data_lookup": ("lookup", "search", "find", "query", "retriev", "fetch", "data"),
-    "booking": ("book", "reserv", "schedul", "appointment", "ticket"),
-    "code_change": ("code", "bug", "fix", "refactor", "test", "deploy", "build", "commit", "pull request"),
-    "research": ("research", "analy", "summar", "report", "compare"),
-    "purchase": ("buy", "purchas", "order", "checkout", "pay"),
-    "messaging": ("email", "message", "send", "notify", "post"),
-    "file_ops": ("file", "upload", "download", "document", "spreadsheet"),
-    "content": ("content", "article", "image", "video", "copy", "design", "write"),
-}
+GOAL_CATEGORIES = {k: tuple(v) for k, v in SC["goal_categories"].items()}
 _MEMORY_MAX = 5000
 _AGENT_LAST: "OrderedDict[str, dict]" = OrderedDict()
 _NEED_MEMORY: "OrderedDict[str, dict]" = OrderedDict()
@@ -677,10 +720,11 @@ _STEP_TYPES = {
     "final": "final", "done": "final", "finish": "final", "end": "final", "answer": "final", "report": "final",
     "respond": "final", "reply": "final",
 }
-_ERROR_STATUSES = {"error", "failed", "fail", "failure", "timeout", "exception", "denied", "invalid", "notfound",
-                   "not_found", "4xx", "5xx", "500", "404", "crash"}
-_PASS_STATUSES = {"passed", "pass", "ok", "success", "true", "matched", "match", "200"}
-_CONTINUE_STATUSES = {"partial", "more", "has_more", "next", "paged", "continue"}
+_ERROR_STATUSES = set(SC["statuses"]["error"])
+_PASS_STATUSES = set(SC["statuses"]["pass"])
+_CONTINUE_STATUSES = set(SC["statuses"]["continue"])
+_FAILED_VERIFY_STATUSES = set(SC["statuses"]["failed_verify"])
+_INCOMPLETE_STATUSES = set(SC["statuses"]["incomplete"])
 _COMPACT_SEG = re.compile(r"^(?:\d+\s*[.)]\s*)?([a-z_]+)(?::([\w.\-/]+))?(?:\s*[:=]?\s*([\w\-]+))?$")
 
 
@@ -857,16 +901,7 @@ def _count_identical_repeats(steps: list) -> tuple[int, dict]:
 
 
 VERIFY_KINDS = ("api", "script", "visual", "human", "end_to_end", "test")
-GOAL_VERIFY_FIT = {
-    "code_change": {"script", "api", "end_to_end", "test"},
-    "data_lookup": {"api", "script", "end_to_end", "human", "test"},
-    "booking": {"api", "end_to_end", "human"},
-    "purchase": {"api", "end_to_end", "human"},
-    "messaging": {"api", "end_to_end", "human"},
-    "file_ops": {"visual", "human", "end_to_end", "script", "test"},
-    "content": {"visual", "human", "end_to_end", "script"},
-    "research": {"human", "api", "script"},
-}
+GOAL_VERIFY_FIT = {k: set(v) for k, v in SC["verify_fit"].items()}
 WHAT_TO_VERIFY = {
     "code_change": "Run the tests or an end-to-end check on the changed code.",
     "data_lookup": "Confirm the returned data is complete and matches the query.",
@@ -887,7 +922,7 @@ def _incomplete_before_claim(steps: list) -> bool:
         if st["type"] in ("action", "retry", "fallback") and st["tool"]:
             last[st["tool"]] = (st["status"] or "ok", idx)
     for status, idx in last.values():
-        if status in ("partial", "empty", "incomplete", "none"):
+        if status in _INCOMPLETE_STATUSES:
             later = steps[idx + 1:]
             if not any(s["type"] == "verify" and s["status"] in _PASS_STATUSES for s in later):
                 return True
@@ -902,10 +937,11 @@ def score_steps(goal: str, steps: list, outcome: str) -> dict:
 
     # 1. Goal clarity: a generic category is enough here (content is intentionally absent)
     category = goal_category(goal_l)
-    if len(goal_l) >= 3:
-        dimensions["goal_clarity"] = 70 + (10 if category != "other" else 0) + (5 if len(goal_l.split()) >= 2 else 0)
+    if len(goal_l) >= _ST["goal_min_len"]:
+        dimensions["goal_clarity"] = (_ST["goal_base"] + (_ST["goal_category_bonus"] if category != "other" else 0)
+                                      + (_ST["goal_two_words_bonus"] if len(goal_l.split()) >= 2 else 0))
     else:
-        dimensions["goal_clarity"] = 40
+        dimensions["goal_clarity"] = _ST["goal_missing_score"]
         _flag(issues, suggestions, "goal_missing")
 
     # 2. Efficiency: see _count_identical_repeats (ok repeats need a label/target_hash).
@@ -913,31 +949,30 @@ def score_steps(goal: str, steps: list, outcome: str) -> dict:
     distinct = n - redundant
 
     # 3. Observability: enough distinct steps, and a status recorded on actions
-    obs = 40 + 6 * min(distinct, 8)
-    if distinct < 3:
-        obs = 25
+    obs = _ST["obs_base"] + _ST["obs_per_step"] * min(distinct, _ST["obs_step_cap"])
+    if distinct < _ST["obs_min_steps"]:
+        obs = _ST["obs_few_score"]
         _flag(issues, suggestions, "too_few_steps")
     if any(s["type"] == "observe" for s in steps):
-        obs += 10
+        obs += _ST["obs_observe_bonus"]
     actions = [s for s in steps if s["type"] == "action"]
     with_status = sum(1 for s in actions if s["status"]) + sum(1 for s in steps if s["type"] == "observe")
-    if actions and with_status >= 0.8 * len(actions):
-        obs += 15
+    if actions and with_status >= _ST["obs_status_share"] * len(actions):
+        obs += _ST["obs_status_bonus"]
     else:
         _flag(issues, suggestions, "missing_step_status")
     dimensions["observability"] = max(0, min(100, obs))
 
-    eff = 100 if distinct >= 3 else 60
-    eff -= min(20, 5 * sum(1 for s in steps if _is_error_step(s)))  # each failed call is spent effort
+    eff = _EFF["full"] if distinct >= _EFF["min_steps"] else _EFF["few_steps_score"]
+    eff -= min(_EFF["max_error_penalty"], _EFF["per_error"] * sum(1 for s in steps if _is_error_step(s)))
     if redundant:
-        eff -= min(80, 15 * redundant)
-        top, top_n = max(counts.items(), key=lambda kv: kv[1])
-        if redundant >= 2 or redundant / n >= 0.3:
+        eff -= min(_EFF["max_redundant_penalty"], _EFF["per_redundant"] * redundant)
+        if redundant >= _EFF["loop_min_redundant"] or redundant / n >= _EFF["loop_min_ratio"]:
             _flag(issues, suggestions, "loop_detected")
         else:
             _flag(issues, suggestions, "redundant_step")
-        if redundant >= 3 and redundant / n >= 0.4:
-            caps.append((45, "most of the trace is a repeat loop"))
+        if redundant >= _CAPS["loop_min_redundant"] and redundant / n >= _CAPS["loop_min_ratio"]:
+            caps.append((_CAPS["loop"], "most of the trace is a repeat loop"))
     dimensions["efficiency"] = max(0, eff)
 
     # 4. Error recovery: each error must be followed by retry/fallback, a successful action, or a passed verify
@@ -958,61 +993,61 @@ def score_steps(goal: str, steps: list, outcome: str) -> dict:
             last_tool = st["tool"]
     unresolved = len(pending)
     high_stakes = any(p[1] == "high" for p in pending)
-    err = 75
+    err = _ST["err_base"]
     if unresolved:
-        err -= 35 + 15 * (unresolved - 1)
+        err -= _ST["err_unresolved_penalty"] + _ST["err_unresolved_extra"] * (unresolved - 1)
         if high_stakes:
-            err -= 15
+            err -= _ST["err_high_stakes_penalty"]
         elif all(p[1] == "low" for p in pending):
-            err += 10
+            err += _ST["err_low_stakes_bonus"]
         _flag(issues, suggestions, "unrecovered_error", **({"stakes": "high"} if high_stakes else {}))
     elif errors and not lowered:
-        err += 10
+        err += _ST["err_recovered_bonus"]
     if lowered:
-        err -= 20
+        err -= _ST["err_lowered_penalty"]
         _flag(issues, suggestions, "requirement_lowered")
     dimensions["error_recovery"] = max(0, min(100, err))
 
     # 5. Alignment: outcome status vs. what the steps show
-    align = 60
+    align = _ST["align_base"]
     verifies = [s for s in steps if s["type"] == "verify"]
     passed = any(s["status"] in _PASS_STATUSES or s["status"] is None for s in verifies)
-    failed_verify = any(s["status"] in _ERROR_STATUSES or s["status"] in ("not_passed", "mismatch", "false") for s in verifies)
-    claims_success = any(w in outcome_l for w in ("success", "succeeded", "ok", "done", "complete", "passed")) \
-        and not any(w in outcome_l for w in ("partial", "fail", "unsuccessful", "not "))
+    failed_verify = any(s["status"] in _ERROR_STATUSES or s["status"] in _FAILED_VERIFY_STATUSES for s in verifies)
+    claims_success = any(w in outcome_l for w in SC["words"]["success_outcome"]) \
+        and not any(w in outcome_l for w in SC["words"]["outcome_negation"])
     if not outcome_l:
-        align -= 30
+        align -= _ST["align_outcome_missing_penalty"]
         _flag(issues, suggestions, "outcome_missing")
     else:
-        align += 15  # an explicit outcome status maps directly onto the goal category
+        align += _ST["align_outcome_present_bonus"]
     incomplete = _incomplete_before_claim(steps)
     if claims_success and (unresolved or (failed_verify and not passed)):
-        align -= 35 + (10 if high_stakes else 0)
+        align -= _ST["align_ungrounded_penalty"] + (_ST["align_ungrounded_high_stakes_extra"] if high_stakes else 0)
         _flag(issues, suggestions, "ungrounded_success")
-        caps.append((40, "success claimed over unresolved errors"))
+        caps.append((_CAPS["ungrounded_success"], "success claimed over unresolved errors"))
     elif claims_success and incomplete:
-        align -= 35
+        align -= _ST["align_incomplete_penalty"]
         _flag(issues, suggestions, "conclusion_on_incomplete_data")
-        caps.append((55, "success claimed on incomplete data"))
+        caps.append((_CAPS["incomplete_data"], "success claimed on incomplete data"))
     elif claims_success:
-        align += 10
+        align += _ST["align_success_bonus"]
     if claims_success and lowered:
-        align -= 15
+        align -= _ST["align_lowered_success_penalty"]
     what = WHAT_TO_VERIFY.get(category, WHAT_TO_VERIFY["other"])
     kinds = [s.get("verify_kind") for s in verifies if s.get("verify_kind")]
     fits = GOAL_VERIFY_FIT.get(category)
     if passed and kinds and fits and not any(k in fits for k in kinds):
-        align += 5  # a verification of a kind that does not fit the goal counts for less
+        align += _ST["align_kind_mismatch_bonus"]  # a verification of a kind that does not fit counts for less
         _flag(issues, suggestions, "verify_kind_mismatch", what_to_verify=what)
         if "fix_specify_verification" not in suggestions:
             suggestions.append("fix_specify_verification")
     elif passed:
-        align += 15
+        align += _ST["align_verify_passed_bonus"]
     elif verifies:
-        align -= 10
+        align -= _ST["align_verify_failed_penalty"]
         _flag(issues, suggestions, "missing_verification", fix_id="fix_specify_verification", what_to_verify=what)
     else:
-        align -= 10
+        align -= _ST["align_no_verify_penalty"]
         _flag(issues, suggestions, "missing_verification", what_to_verify=what)
     dimensions["goal_alignment"] = max(0, min(100, align))
     return _finish(dimensions, issues, suggestions, caps, privacy_mode=True)
@@ -1052,78 +1087,77 @@ def score_text_trace(goal: str, trace: str, outcome: str) -> dict:
     lines = [l.strip() for l in trace.splitlines() if l.strip()]
 
     # 1. Goal clarity (unchanged)
-    goal_score = 80
-    if len(goal.strip()) < 20:
-        goal_score -= 30
+    goal_score = _TX["goal_base"]
+    if len(goal.strip()) < _TX["goal_min_len"]:
+        goal_score -= _TX["goal_vague_penalty"]
         _flag(issues, suggestions, "goal_vague")
-    if not any(w in goal_l for w in ["find", "book", "create", "analyze", "get", "write", "send", "check", "calculate", "research"]):
-        goal_score -= 10
+    if not any(w in goal_l for w in SC["words"]["goal_verbs"]):
+        goal_score -= _TX["goal_no_verb_penalty"]
     dimensions["goal_clarity"] = max(0, goal_score)
 
     # 2. Efficiency: loops / redundant steps (new in v0.3)
     redundant, top_step, top_count = _find_redundant(lines)
 
     # 3. Trace structure & observability (redundant steps don't count as distinct steps)
-    step_like = sum(1 for l in lines if any(l.lower().startswith(p) for p in ("1.", "2.", "-", "*", "step", "called", "observed", "tool")))
+    step_like = sum(1 for l in lines if any(l.lower().startswith(p) for p in SC["words"]["step_prefixes"]))
     step_count = max(len(lines), step_like, trace.count(". ") + 1) - redundant
-    obs_score = 50
-    if step_count < 3:
-        obs_score -= 25
+    obs_score = _TX["obs_base"]
+    if step_count < _TX["obs_few_steps"]:
+        obs_score -= _TX["obs_few_penalty"]
         _flag(issues, suggestions, "too_few_steps")
-    if step_count >= 5:
-        obs_score += 20
-    if any(w in trace_l for w in ["observed", "result:", "returned", "output:", "saw", "found", "tests passed", "status 2"]):
-        obs_score += 15
+    if step_count >= _TX["obs_many_steps"]:
+        obs_score += _TX["obs_many_bonus"]
+    if any(w in trace_l for w in SC["words"]["observation"]):
+        obs_score += _TX["obs_observed_bonus"]
     else:
         _flag(issues, suggestions, "missing_observations")
-    if len(trace) < 80:
-        obs_score -= 20
+    if len(trace) < _TX["short_trace_chars"]:
+        obs_score -= _TX["short_trace_penalty"]
         _flag(issues, suggestions, "trace_too_short")
     dimensions["observability"] = max(0, min(100, obs_score))
 
-    eff_score = 100 if step_count >= 3 else 60  # can't credit efficiency on a near-empty trace
+    eff_score = _EFF["full"] if step_count >= _EFF["min_steps"] else _EFF["few_steps_score"]
     if redundant:
-        eff_score -= min(80, 15 * redundant)
+        eff_score -= min(_EFF["max_redundant_penalty"], _EFF["per_redundant"] * redundant)
         ratio = redundant / max(1, len(lines))
-        example = f" (e.g. '{top_step[:80]}' x{top_count})" if top_step else ""
-        if redundant >= 2 or ratio >= 0.3:
+        if redundant >= _EFF["loop_min_redundant"] or ratio >= _EFF["loop_min_ratio"]:
             _flag(issues, suggestions, "loop_detected")
         else:
             _flag(issues, suggestions, "redundant_step")
-        if redundant >= 3 and ratio >= 0.4:
-            caps.append((45, "most of the trace is a repeat loop"))
+        if redundant >= _CAPS["loop_min_redundant"] and ratio >= _CAPS["loop_min_ratio"]:
+            caps.append((_CAPS["loop"], "most of the trace is a repeat loop"))
     dimensions["efficiency"] = max(0, eff_score)
 
     # 4. Error handling & recovery (per-error: is it followed by a retry/fix/verification?)
     error_count, unresolved = _unresolved_errors(lines)
-    err_score = 75
+    err_score = _TX["err_base"]
     if unresolved:
-        err_score -= 35 + 15 * (unresolved - 1)
+        err_score -= _TX["err_unresolved_penalty"] + _TX["err_unresolved_extra"] * (unresolved - 1)
         _flag(issues, suggestions, "unrecovered_error")
     elif error_count:
-        err_score += 10
+        err_score += _TX["err_recovered_bonus"]
     dimensions["error_recovery"] = max(0, min(100, err_score))
 
     # 5. Goal–outcome alignment: evidence over claims
-    align_score = 60
-    goal_words = set(w for w in goal_l.split() if len(w) > 4)
-    outcome_words = set(w for w in outcome_l.split() if len(w) > 4)
-    if len(goal_words & outcome_words) >= 2:
-        align_score += 15
+    align_score = _TX["align_base"]
+    goal_words = set(w for w in goal_l.split() if len(w) > _TX["align_word_len"])
+    outcome_words = set(w for w in outcome_l.split() if len(w) > _TX["align_word_len"])
+    if len(goal_words & outcome_words) >= _TX["align_overlap_min"]:
+        align_score += _TX["align_overlap_bonus"]
     claims_success = any(w in outcome_l for w in _SUCCESS_WORDS)
     if claims_success and unresolved:
-        align_score -= 35
+        align_score -= _TX["align_ungrounded_penalty"]
         _flag(issues, suggestions, "ungrounded_success")
-        caps.append((40, "success claimed over unresolved errors"))
+        caps.append((_CAPS["ungrounded_success"], "success claimed over unresolved errors"))
     elif claims_success:
-        align_score += 10
-    if not outcome or len(outcome.strip()) < 15:
-        align_score -= 30
+        align_score += _TX["align_success_bonus"]
+    if not outcome or len(outcome.strip()) < _TX["outcome_min_len"]:
+        align_score -= _TX["outcome_vague_penalty"]
         _flag(issues, suggestions, "outcome_vague")
     if any(w in trace_l for w in _VERIFY_WORDS):
-        align_score += 15
+        align_score += _TX["align_verify_bonus"]
     else:
-        align_score -= 10
+        align_score -= _TX["align_no_verify_penalty"]
         _flag(issues, suggestions, "missing_verification")
     dimensions["goal_alignment"] = max(0, min(100, align_score))
 
@@ -1135,7 +1169,7 @@ _VERIFY_FIXES = ("fix_add_verification", "fix_specify_verification", "fix_choose
 
 def _finish(dimensions: dict, issues: list, suggestions: list, caps: list, privacy_mode: bool) -> dict:
     # 6. Overall score (weighted), then critical-flaw caps
-    weights = {"goal_clarity": 0.10, "observability": 0.25, "error_recovery": 0.20, "goal_alignment": 0.30, "efficiency": 0.15}
+    weights = _W
     score = int(max(0, min(100, round(sum(dimensions[k] * weights[k] for k in weights)))))
     for cap, _reason in caps:
         score = min(score, cap)
@@ -1362,7 +1396,8 @@ async def agent_card_legacy(request: Request):
 
 @mcp.custom_route("/health", methods=["GET"])
 async def health(request: Request):
-    return JSONResponse({"status": "ok", "service": "tracecheck", "version": VERSION, "scoring_version": SCORING_VERSION})
+    return JSONResponse({"status": "ok", "service": "tracecheck", "version": VERSION, "scoring_version": SCORING_VERSION,
+                         "scoring_config": SCORING_CONFIG_SOURCE})
 
 
 @mcp.custom_route("/a2a/health", methods=["GET"])

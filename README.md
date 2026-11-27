@@ -66,15 +66,20 @@ curl -s -X POST https://tracecheck-mcp.onrender.com/a2a/message:send -H 'Content
 ```json
 { "score": 40,
   "dimensions": {"goal_clarity": 80, "observability": 50, "efficiency": 100, "error_recovery": 25, "goal_alignment": 15},
-  "issues": ["2 error(s)/failure(s) in the trace are not followed by any recovery (retry, fallback, fix) or verification.",
-             "Outcome claims success, but the trace contains unresolved errors: the claim is not supported by evidence.", "..."],
-  "suggestions": ["Only report success for steps whose results you observed; state explicitly what failed and what is still open.", "..."],
-  "summary": "TraceCheck score: 40/100. ... Capped: success claimed over unresolved errors.", "version": "0.3.0" }
+  "issues": [{"code": "missing_observations", "text": "..."}, {"code": "unrecovered_error", "text": "..."},
+             {"code": "ungrounded_success", "text": "..."}, {"code": "missing_verification", "text": "...", "what_to_verify": "..."}],
+  "suggestions": [{"id": "fix_record_observations", "text": "..."}, {"id": "fix_recover_error", "text": "..."},
+                  {"id": "fix_report_honest_outcome", "text": "..."}, {"id": "fix_add_verification", "text": "..."}],
+  "summary": "TraceCheck score: 40/100. ...", "need_id": "nd_...", "version": "0.5.0", "scoring_version": "0.5.0" }
 ```
 
 **For agents:** after a multi-step task, send `goal` + `trace` + `outcome`. You get back a score from 0 to 100, five sub-scores (goal_clarity, observability, error_recovery, goal_alignment, efficiency), the issues found and up to 5 concrete fixes.
 
 **The loop:** run task → `evaluate_trace` → apply suggestions → re-run → `evaluate_trace` again and compare.
+
+## Scoring configuration
+
+The scoring code in this repository is open. The tuned scoring configuration that runs on the hosted service is private: it is calibrated continuously against reviewer judgments and real agent outcomes. A local install uses a generic public fallback (`scoring_config.fallback.json`). It works and returns the same issue codes and fix ids, but its scores are not comparable to the hosted service. `GET /health` shows which configuration is active (`scoring_config`: `private` or `fallback`). The [spec](SPEC.md) describes what goes in and comes out, not how scores are computed.
 
 ## Tools
 | Tool | Purpose |
@@ -156,4 +161,4 @@ Since v0.4 TraceCheck stores **no content**: no goal, trace or outcome text, and
 ## What's new in v0.3
 - Adds an efficiency view, stronger checks on success claims and error handling, and call logging without content (see [Privacy](#privacy-what-is-logged)). API unchanged (`dimensions` gains `efficiency`).
 
-Example scores (`python examples/run_examples.py`): 01 clean 91, 02 looping 45, 03 ignored error 40, 04 vague 35, 05 error then retry 91, 06 verified with evidence 88, 07 pagination 89, 08 privacy-light steps 91.
+Example scores on the hosted service (`python examples/run_examples.py` gives other numbers locally, see [Scoring configuration](#scoring-configuration)): 01 clean 91, 02 looping 45, 03 ignored error 40, 04 vague 35, 05 error then retry 91, 06 verified with evidence 88, 07 pagination 89, 08 privacy-light steps 91.

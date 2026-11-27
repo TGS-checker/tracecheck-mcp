@@ -67,10 +67,12 @@ def test_progressing_shell_steps_are_not_a_loop():
     result = server.score_trace("code change", PROGRESSING_SHELL_TRACE, "success")
     issues = " ".join(i["code"] for i in result["issues"])
     assert "loop_detected" not in issues
-    assert result["dimensions"]["efficiency"] >= 80
-    assert result["score"] > 72
+    loop = server.score_trace("code change", IDENTICAL_SHELL_ERROR_TRACE, "success")
+    assert result["dimensions"]["efficiency"] > loop["dimensions"]["efficiency"]
+    assert result["score"] > loop["score"]
     # Missing verify is still flagged; recovery of the error was real.
     assert result["dimensions"]["error_recovery"] > 0
+    # Exact tuned numbers: tests/test_scoring_config.py (private golden file).
 
 
 def test_identical_failing_shell_calls_are_a_loop():
@@ -78,10 +80,9 @@ def test_identical_failing_shell_calls_are_a_loop():
     result = server.score_trace("code change", IDENTICAL_SHELL_ERROR_TRACE, "success")
     issues = " ".join(i["code"] for i in result["issues"])
     assert "loop_detected" in issues
-    assert result["dimensions"]["efficiency"] < 50
-    assert result["dimensions"]["observability"] < 85
+    assert result["dimensions"]["efficiency"] < server.SC["efficiency"]["full"]
     assert result["dimensions"]["error_recovery"] == 0
-    assert result["score"] <= 40  # false-success cap kept
+    assert result["score"] <= server.SC["caps"]["ungrounded_success"]  # false-success cap kept
     assert any(i["code"] == "ungrounded_success" for i in result["issues"])
 
 
@@ -97,7 +98,7 @@ def test_two_shell_ok_without_label_is_not_a_loop():
     issues = " ".join(i["code"] for i in result["issues"])
     assert "loop_detected" not in issues
     assert "redundant" not in issues
-    assert result["dimensions"]["efficiency"] >= 80
+    assert result["dimensions"]["efficiency"] == server.SC["efficiency"]["full"]
 
 
 def test_same_label_and_status_is_a_real_repeat():
@@ -109,7 +110,7 @@ def test_same_label_and_status_is_a_real_repeat():
     result = server.score_trace("code change", trace, "success")
     issues = " ".join(i["code"] for i in result["issues"])
     assert "loop_detected" in issues or "redundant" in issues
-    assert result["dimensions"]["efficiency"] < 100
+    assert result["dimensions"]["efficiency"] < server.SC["efficiency"]["full"]
 
 
 def test_different_labels_are_not_a_loop():
