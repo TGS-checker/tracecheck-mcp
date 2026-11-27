@@ -1,6 +1,33 @@
-"""Basic scoring: a good trace outranks a bad one, and malformed input does not crash."""
+"""Basic scoring: good vs bad traces, loop-detector regressions, malformed input."""
 
 import server
+
+# Built from the pod-geldverdiener tester report (v0.4.3 false positive / false negative).
+PROGRESSING_SHELL_TRACE = [
+    {"type": "action", "tool": "shell", "status": "ok"},
+    {"type": "observe", "status": "ok"},
+    {"type": "action", "tool": "shell", "status": "empty"},
+    {"type": "observe", "status": "empty"},
+    {"type": "action", "tool": "shell", "status": "ok"},
+    {"type": "observe", "status": "ok"},
+    {"type": "action", "tool": "shell", "status": "empty"},
+    {"type": "observe", "status": "empty"},
+    {"type": "action", "tool": "shell", "status": "ok"},
+    {"type": "observe", "status": "ok"},
+    {"type": "action", "tool": "shell", "status": "error"},
+    {"type": "error", "tool": "shell", "status": "error"},
+    {"type": "retry", "tool": "shell", "status": "ok"},
+    {"type": "observe", "status": "ok"},
+    {"type": "action", "tool": "search", "status": "ok"},
+    {"type": "observe", "status": "ok"},
+    {"type": "final"},
+]
+assert len(PROGRESSING_SHELL_TRACE) == 17
+
+IDENTICAL_SHELL_ERROR_TRACE = (
+    [{"type": "action", "tool": "shell", "status": "error"}] * 6
+    + [{"type": "error"}]
+)
 
 
 def test_good_trace_scores_higher_than_bad_trace():
@@ -17,6 +44,7 @@ def test_good_trace_scores_higher_than_bad_trace():
     assert isinstance(good["score"], int)
     assert isinstance(bad["score"], int)
     assert 0 <= bad["score"] < good["score"] <= 100
+    assert good.get("scoring_version") == server.SCORING_VERSION
 
 
 def test_malformed_input_returns_clear_error_without_crashing():
@@ -32,3 +60,26 @@ def test_malformed_input_returns_clear_error_without_crashing():
         assert "error" in result
         assert isinstance(result["error"], str) and result["error"].strip()
         assert "score" not in result or result["score"] is None
+
+
+def test_progressing_shell_steps_are_not_a_loop():
+    """17-step real flow: shell ok/empty/error with observes and status changes, retry succeeds, final, no verify."""
+    result = server.score_trace("code change", PROGRESSING_SHELL_TRACE, "success")
+    issues = " ".join(result["issues"]).lower()
+    assert "loop detected" not in issues
+    assert result["dimensions"]["efficiency"] >= 80
+    assert result["score"] > 72
+    # Missing verify is still flagged; recovery of the error was real.
+    assert result["dimensions"]["error_recovery"] > 0
+
+
+def test_identical_failing_shell_calls_are_a_loop():
+    """6x identical shell error + an error, no final, outcome success: must count as a loop."""
+    result = server.score_trace("code change", IDENTICAL_SHELL_ERROR_TRACE, "success")
+    issues = " ".join(result["issues"]).lower()
+    assert "loop detected" in issues
+    assert result["dimensions"]["efficiency"] < 50
+    assert result["dimensions"]["observability"] < 85
+    assert result["dimensions"]["error_recovery"] == 0
+    assert result["score"] <= 40  # false-success cap kept
+    assert any("success" in i.lower() and "unresolved" in i.lower() for i in result["issues"])

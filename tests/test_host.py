@@ -32,19 +32,16 @@ def assert_actionable(data: dict) -> dict:
     assert payload.get("hint"), data
     assert str(payload.get("docs", "")).endswith("/llms.txt"), data
     example = payload["example"]
-    mcp_call = example["mcp"]
-    assert mcp_call["method"] == "tools/call"
-    assert mcp_call["params"]["name"] == "evaluate_trace"
-    assert "action:search ok" in mcp_call["params"]["arguments"]["trace"]
-    assert "parts" in example["a2a"]["message"] or "data" in json.dumps(example["a2a"])
-    assert len(payload["how_to"]) == 3
-    blob = " ".join(payload["how_to"]).lower()
-    assert "get_trace_schema" in blob
-    assert "step types" in blob
-    assert "score" in blob
-    assert "/mcp" in payload["links"]["mcp"]
-    assert "agent-card.json" in payload["links"]["a2a_agent_card"]
-    assert "/health" in payload["links"]["health"]
+    # One short example, no duplicated MCP/A2A blocks or how_to lists.
+    assert "mcp" not in example and "a2a" not in example
+    assert "how_to" not in payload
+    assert "links" not in payload
+    args = example.get("arguments") or example
+    assert example.get("name", "evaluate_trace") == "evaluate_trace"
+    assert "action:search ok" in str(args.get("trace", args))
+    blob = json.dumps(payload)
+    # No large duplicated blocks.
+    assert blob.count("action:search ok") <= 2
     return payload
 
 
@@ -119,3 +116,123 @@ def test_evaluate_trace_missing_fields_is_actionable():
 def test_malformed_score_trace_is_actionable():
     result = server.score_trace("find the cheapest direct flight", {"not": "a trace"}, "success claimed")
     assert_actionable(result)
+
+
+def _mcp_headers(session=None):
+    h = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+    if session:
+        h["mcp-session-id"] = session
+    return h
+
+
+def _rpc(client, method, params=None, sid=None, id_=1):
+    r = client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": id_, "method": method, "params": params or {}},
+        headers=_mcp_headers(sid),
+    )
+    return r
+
+
+def test_get_mcp_plain_json_help_does_not_hang(client):
+    r = client.get("/mcp", headers={"Accept": "application/json"})
+    assert r.status_code == 200
+    data = r.json()
+    assert_actionable(data)
+    assert "/mcp" in data["error"] or "MCP" in data["error"]
+    assert "llms.txt" in data["docs"]
+
+
+def test_get_mcp_with_sse_accept_is_passed_to_the_stream(client):
+    """Real streamable-HTTP clients that ask for SSE must not get the plain JSON help page."""
+    import asyncio
+
+    seen = []
+    recorded = []
+
+    async def fake_app(scope, receive, send):
+        seen.append(scope.get("path"))
+        await send({"type": "http.response.start", "status": 204, "headers": []})
+        await send({"type": "http.response.body", "body": b"", "more_body": False})
+
+    async def send(message):
+        recorded.append(message)
+
+    async def receive():
+        return {"type": "http.disconnect"}
+
+    async def run2():
+        mw = server.McpGetHelp(fake_app)
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/mcp",
+            "headers": [(b"accept", b"application/json, text/event-stream")],
+        }
+        await mw(scope, receive, send)
+
+    asyncio.run(run2())
+    assert seen == ["/mcp"], "SSE Accept should reach the MCP stream handler, not the JSON help page"
+    assert recorded and recorded[0].get("status") == 204
+
+
+def test_unknown_path_mcpx_is_unknown_path_not_session(client):
+    r = client.get("/mcpx")
+    assert r.status_code == 404
+    data = r.json()
+    payload = assert_actionable(data)
+    blob = json.dumps(data).lower()
+    assert "session_not_found" not in blob
+    assert payload.get("reason") == "unknown_path" or "unknown path" in payload["error"].lower()
+
+
+def test_unknown_tool_lists_names_and_suggestion(client):
+    init = _rpc(client, "initialize", {
+        "protocolVersion": "2025-03-26",
+        "capabilities": {},
+        "clientInfo": {"name": "host-test", "version": "0"},
+    })
+    assert init.status_code in (200, 202)
+    sid = init.headers.get("mcp-session-id")
+    r = _rpc(client, "tools/call", {"name": "eval_trace", "arguments": {}}, sid=sid, id_=2)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    result = body.get("result") or {}
+    assert result.get("isError") is True or result.get("is_error") is True
+    text = json.dumps(body)
+    assert "evaluate_trace" in text
+    assert "get_trace_schema" in text
+    assert "did you mean" in text.lower()
+    assert "eval_trace" in text
+
+
+def test_missing_fields_tool_result_is_error(client):
+    init = _rpc(client, "initialize", {
+        "protocolVersion": "2025-03-26",
+        "capabilities": {},
+        "clientInfo": {"name": "host-test", "version": "0"},
+    })
+    sid = init.headers.get("mcp-session-id")
+    r = _rpc(client, "tools/call", {"name": "evaluate_trace", "arguments": {}}, sid=sid, id_=2)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    result = body.get("result") or {}
+    assert result.get("isError") is True or result.get("is_error") is True
+    # The payload still carries a short actionable example.
+    text = " ".join(
+        (c.get("text") or "") for c in (result.get("content") or [])
+        if isinstance(c, dict)
+    ) or json.dumps(body)
+    assert "error" in text.lower()
+    assert "evaluate_trace" in text or "action:search ok" in text
+
+
+def test_schema_leads_with_privacy_light_example():
+    schema = server.get_trace_schema()
+    example = schema["example_call"]
+    assert example["goal"] == "data lookup"
+    assert example["outcome"] == "success"
+    assert schema.get("recommended_format") == "privacy_light"
+    content = schema.get("example_call_with_content") or {}
+    note = (content.get("note") or "").lower()
+    assert "not recommended" in note or "optional" in note

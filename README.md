@@ -63,7 +63,7 @@ curl -s -X POST https://tracecheck-mcp.onrender.com/a2a/message:send -H 'Content
 ## Tools
 | Tool | Purpose |
 |---|---|
-| `evaluate_trace(goal, trace, outcome, agent_name?)` | Scores the trace (free text, or step types only). Returns `{score, dimensions, issues, suggestions, summary, privacy_mode, version}` |
+| `evaluate_trace(goal, trace, outcome, agent_name?)` | Scores the trace (free text, or step types only). Returns `{score, dimensions, issues, suggestions, summary, privacy_mode, version, scoring_version}` |
 | `get_trace_schema()` | Returns the input format, dimension weights and a copyable example |
 
 ## Quickstart
@@ -87,19 +87,7 @@ Docker: `docker build -t tracecheck . && docker run -p 8000:8000 tracecheck`
 ```
 
 ## Trace format
-Plain strings. `trace` = chronological steps, one per line: what you called, what it **returned/observed**, any error **and the retry/fallback**, and a final `Verified: ...` line.
-```json
-{
-  "goal": "Find the cheapest direct flight from Amsterdam to Lisbon on 12 March and report price and flight number.",
-  "trace": "1. Called search_flights(AMS->LIS, 2027-03-12, direct)\n2. Observed: returned 4 flights; cheapest KL1693 EUR 89\n3. get_fare_details -> error: timeout\n4. Retried -> returned EUR 89 incl. taxes\n5. Verified: direct, correct date, cheapest; matches goal",
-  "outcome": "KL1693 AMS->LIS on 12 March, EUR 89 incl. taxes.",
-  "agent_name": "my-agent"
-}
-```
-A2A: send the same object as a `data` part: `{"message":{"role":"ROLE_USER","messageId":"1","parts":[{"data":{...}}]}}`.
-
-### Privacy-light format (no content needed: send step types only)
-If your trace contains user data, send only step types and statuses. `goal` can be a generic category, `outcome` a status.
+Default and recommended: **privacy-light** (no content needed). Send step types and statuses only. `goal` is a generic category, `outcome` a status.
 ```json
 {
   "goal": "data lookup",
@@ -114,10 +102,22 @@ If your trace contains user data, send only step types and statuses. `goal` can 
 }
 ```
 Compact string form of the same trace: `"action:search ok > action:fetch_details error > retry:fetch_details ok > verify passed"` (segments `type[:tool] [status]`, separated by `>` or newlines).
-- Types: `action`, `observe`, `error`, `retry`, `fallback`, `verify`. Statuses: `ok`, `partial`, `empty`, `error`/`failed`/`timeout`, `passed`/`failed` (verify).
-- Scoring uses the same five dimensions: repeated calls of the same tool after a successful result are a loop (use status `partial` for paged results), every error needs a later `retry`/`fallback`, a successful call of the same tool or a passed `verify`, and claiming `success` over unresolved errors is capped at 40.
+A2A: send the same object as a `data` part: `{"message":{"role":"ROLE_USER","messageId":"1","parts":[{"data":{...}}]}}`.
+- Types: `action`, `observe`, `error`, `retry`, `fallback`, `verify`, `final`. Statuses: `ok`, `partial`, `empty`, `error`/`failed`/`timeout`, `passed`/`failed` (verify).
+- A loop is only an identical repeat of the same tool and status with no new observe/progress in between. Status `partial` is pagination, not a loop. Identical failing calls are a loop. Every error needs a later `retry`/`fallback`, a successful call of the same tool, or a passed `verify`. Claiming `success` over unresolved errors is capped at 40.
 - Tool names are only used inside the scoring of that call. They are not logged. Use generic names if you prefer.
 - The response includes `"privacy_mode": true` when this format was detected.
+
+### Optional content example (not recommended)
+A free-text trace with content is optional and not recommended. Prefer step types only. If you still send content, `trace` is chronological steps, one per line: what you called, what it **returned/observed**, any error **and the retry/fallback**, and a final `Verified: ...` line.
+```json
+{
+  "goal": "Find the cheapest direct flight from Amsterdam to Lisbon on 12 March and report price and flight number.",
+  "trace": "1. Called search_flights(AMS->LIS, 2027-03-12, direct)\n2. Observed: returned 4 flights; cheapest KL1693 EUR 89\n3. get_fare_details -> error: timeout\n4. Retried -> returned EUR 89 incl. taxes\n5. Verified: direct, correct date, cheapest; matches goal",
+  "outcome": "KL1693 AMS->LIS on 12 March, EUR 89 incl. taxes.",
+  "agent_name": "my-agent"
+}
+```
 
 ## Privacy: what is logged
 Since v0.4 TraceCheck stores **no content**: no goal, trace or outcome text, and no tool names. Each call writes one line (to `calls.jsonl` and, in HTTP mode, `TRACECHECK_CALL {json}` to stdout / Render logs) with only:

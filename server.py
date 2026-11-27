@@ -30,6 +30,7 @@ Other additions:
 
 from mcp.server import MCPServer  # mcp SDK >= 2.x (MCPServer replaced FastMCP)
 from mcp.server.mcpserver import Context
+from mcp.server.mcpserver.exceptions import ToolError
 import hashlib
 import json
 import logging
@@ -53,6 +54,7 @@ except OSError:  # e.g. installed via uvx/pip on a machine without /workspace
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
 VERSION = "0.4.3"
+SCORING_VERSION = "0.4.4"  # loop detector: identical tool+status only; no version bump of the service
 # stdout carries JSON-RPC in stdio mode, so call lines go to stdout only in HTTP mode (set in main()).
 _CALL_STREAM = sys.stderr
 
@@ -92,35 +94,27 @@ def _help_links(base: str | None = None) -> dict:
     }
 
 
-def _example_calls() -> dict:
-    args = dict(_SAMPLE_ARGS)
-    return {
-        "mcp": {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {"name": "evaluate_trace", "arguments": args},
-        },
-        "a2a": {
-            "endpoint": "/a2a/message:send",
-            "message": {"role": "user", "parts": [{"data": args}]},
-        },
-    }
+def _example_call() -> dict:
+    """One compact working call: evaluate_trace with a privacy-light trace."""
+    return {"name": "evaluate_trace", "arguments": dict(_SAMPLE_ARGS)}
 
 
 def actionable_error(error: str, *, hint: str | None = None, request=None, base: str | None = None, **extra) -> dict:
-    """Short JSON for agents: what went wrong, a working example, and 3 steps to check a trace."""
+    """Short machine-readable error: what went wrong, one example, docs. No duplicated blocks."""
     root = base or _service_base(request)
     body = {
         "error": error,
-        "hint": hint or "POST to /mcp (MCP tools/call) or /a2a/message:send (A2A).",
-        "example": _example_calls(),
-        "how_to": HOW_TO_CHECK_TRACE,
+        "hint": hint or (
+            "POST /mcp tools/call or POST /a2a/message:send. "
+            "1) get_trace_schema 2) send step types only 3) read score and fixes."
+        ),
+        "example": _example_call(),
         "docs": f"{root}/llms.txt",
-        "links": _help_links(root),
-        "version": VERSION,
     }
-    body.update(extra)
+    # Extra keys are only added when they carry new information (no copies of example/docs/hint).
+    for k, v in extra.items():
+        if k not in body:
+            body[k] = v
     return body
 _ICON_RAW = "https://raw.githubusercontent.com/TGS-checker/tracecheck-mcp/main/assets"
 ICONS = [
@@ -156,50 +150,55 @@ No content needed: send step types only. PRIVACY-LIGHT FORMAT (recommended when 
 
 WHEN TO CALL: after you finish (or give up on) a multi-step task that used tools, before you report "done" to the user, or after a failure you want to learn from. Free, no API key, fast and offline (keyword heuristics, no LLM). Call get_trace_schema first if unsure of the format.
 
-INPUT (free-text format, plain strings):
-- goal: the original task, stated specifically (what success looks like). Vague goals under 20 chars are penalised.
-- trace: your chronological steps, one per line, e.g. "1. Called search_flights(AMS->LIS) -> returned 3 results" / "2. Observed: ..." . Write what each tool RETURNED ("observed", "returned", "result:"), any error and the retry/fallback you used, and a final "Verified: ..." line.
-- outcome: the concrete final result you claim, and how it meets the goal.
+INPUT (default: privacy-light, no content):
+- goal: a generic category (e.g. "data lookup").
+- trace: step types only, e.g. "action:search ok > error > retry > verify passed" or a list of {type, tool?, status?}.
+- outcome: "success", "partial" or "failed".
 - agent_name: optional identifier for yourself (logging only).
+A free-text content trace is optional and not recommended; prefer step types only. Call get_trace_schema for that form.
 
 RETURNS JSON: score (int 0-100), dimensions {goal_clarity, observability, error_recovery, goal_alignment, efficiency}, issues (list), suggestions (list, max 5), summary, version.
 
 THE LOOP: run task -> evaluate_trace -> apply the suggestions to your process -> re-run -> evaluate_trace again and compare scores/dimensions. Scores below ~60 usually mean missing observations, unrecovered errors, repeated steps (loops), success claimed without evidence, or no verification step.
 """
 
+_PRIVACY_LIGHT_EXAMPLE = {
+    "goal": "data lookup",
+    "trace": [{"type": "action", "tool": "search", "status": "ok"},
+              {"type": "action", "tool": "fetch_details", "status": "error"},
+              {"type": "retry", "tool": "fetch_details", "status": "ok"},
+              {"type": "verify", "status": "passed"}],
+    "outcome": "success",
+    "agent_name": "my-agent",
+}
+_PRIVACY_LIGHT_COMPACT = "action:search ok > action:fetch_details error > retry:fetch_details ok > verify passed"
+
 TRACE_SCHEMA = {
     "tool": "evaluate_trace",
+    "recommended_format": "privacy_light",
+    "scoring_version": SCORING_VERSION,
     "arguments": {
-        "goal": "string, required. Specific task + what success looks like (>= 20 chars).",
-        "trace": "string, required. Chronological steps, one per line (numbered). For each tool call: what you called and what it returned/what you observed. Record errors AND the recovery (retry/fallback/alternative). End with a 'Verified: ...' line that checks the outcome against the goal.",
-        "outcome": "string, required. The concrete result you claim (>= 15 chars) and how it satisfies the goal.",
+        "goal": "string, required. Default (privacy-light): a generic category, e.g. 'data lookup'.",
+        "trace": "required. Default: step types only — a list [{type, tool?, status?}] or compact "
+                 "'action:search ok > error > retry > verify passed'. Types: action, observe, error, retry, "
+                 "fallback, verify, final. Statuses: ok, partial, empty, error/failed, passed. "
+                 "A free-text content trace is optional and not recommended.",
+        "outcome": "string, required. Default: a status ('success', 'partial' or 'failed').",
         "agent_name": "string, optional. Your identifier, used for logging only.",
     },
+    "example_call": _PRIVACY_LIGHT_EXAMPLE,  # default, shown first: privacy-light, no content
+    "example_compact_trace": _PRIVACY_LIGHT_COMPACT,
     "privacy_light_format": {
-        "note": "No content needed: send step types only. Nothing you send is logged or stored (only score + counts).",
+        "note": "Default and recommended. No content needed: send step types only. Nothing you send is logged or stored (only score + counts).",
         "goal": "a generic category, e.g. 'data lookup', 'booking', 'code change'",
         "trace": "list of steps {type, tool?, status?} OR compact string 'type[:tool] [status] > ...'. "
                  "Types: action, observe, error, retry, fallback, verify, final. Statuses: ok, partial, empty, error/failed, passed.",
         "outcome": "a status: 'success', 'partial' or 'failed' (optionally a category)",
-        "example_call": {
-            "goal": "data lookup",
-            "trace": [{"type": "action", "tool": "search", "status": "ok"},
-                      {"type": "action", "tool": "fetch_details", "status": "error"},
-                      {"type": "retry", "tool": "fetch_details", "status": "ok"},
-                      {"type": "verify", "status": "passed"}],
-            "outcome": "success",
-            "agent_name": "my-agent",
-        },
-        "example_compact_trace": "action:search ok > action:fetch_details error > retry:fetch_details ok > verify passed",
+        "example_call": _PRIVACY_LIGHT_EXAMPLE,
+        "example_compact_trace": _PRIVACY_LIGHT_COMPACT,
     },
-    "scored_dimensions": {
-        "goal_clarity": "weight 0.10 - is the goal specific and action-oriented",
-        "observability": "weight 0.25 - enough distinct (non-repeated) steps, observations of tool results recorded",
-        "error_recovery": "weight 0.20 - every error is followed by a visible retry/fallback/fix or verification",
-        "goal_alignment": "weight 0.30 - outcome matches goal, success claims backed by evidence, explicit verification step",
-        "efficiency": "weight 0.15 - no loops or repeated identical/near-identical steps",
-    },
-    "example_call": {
+    "example_call_with_content": {
+        "note": "Optional and not recommended. Only if you choose to send content. Prefer example_call (step types only).",
         "goal": "Find the cheapest direct flight from Amsterdam to Lisbon on 12 March and report price and flight number.",
         "trace": (
             "1. Called search_flights(from=AMS, to=LIS, date=2027-03-12, direct=true).\n"
@@ -210,6 +209,13 @@ TRACE_SCHEMA = {
         ),
         "outcome": "Cheapest direct flight found: KL1693 AMS->LIS on 12 March, EUR 89 including taxes.",
         "agent_name": "my-travel-agent",
+    },
+    "scored_dimensions": {
+        "goal_clarity": "weight 0.10 - is the goal specific and action-oriented (a category is enough in privacy-light)",
+        "observability": "weight 0.25 - enough distinct (non-repeated) steps, observations of tool results recorded",
+        "error_recovery": "weight 0.20 - every error is followed by a visible retry/fallback/fix or verification",
+        "goal_alignment": "weight 0.30 - outcome matches goal, success claims backed by evidence, explicit verification step",
+        "efficiency": "weight 0.15 - no identical repeats of the same tool and status without observe/progress in between",
     },
     "loop": "run task -> evaluate_trace -> apply suggestions -> re-run -> evaluate_trace again; compare score and dimensions.",
 }
@@ -398,9 +404,16 @@ def evaluate_trace(
     """
     filled = _lenient_args(goal, trace, outcome)
     if filled is None:
-        return _missing_args_error(goal, trace, outcome)
+        err = _missing_args_error(goal, trace, outcome)
+        if ctx is not None:
+            raise ToolError(json.dumps(err))
+        return err
     goal, trace, outcome = filled
     result = score_trace(goal, trace, outcome)
+    if result.get("error"):
+        if ctx is not None:
+            raise ToolError(json.dumps(result))
+        return result
     record_call(trace, agent_name, result, _client_from_ctx(ctx))
     return result
 
@@ -469,6 +482,47 @@ def _is_error_step(st: dict) -> bool:
     return st["type"] == "error" or (st["status"] in _ERROR_STATUSES)
 
 
+def _count_identical_repeats(steps: list) -> tuple[int, dict]:
+    """Return (redundant_count, counts_by_tool).
+
+    A loop is only the same tool AND the same status, with no new observe/progress
+    between those calls. An observe, a status change, a verify/final, or a call of a
+    different tool counts as progress. Status 'partial' (pagination) is never a loop.
+    Identical failing calls (e.g. action:shell error repeated) ARE a loop.
+    """
+    last_status: dict = {}
+    progress_since: dict = {}
+    redundant = 0
+    counts: dict = {}
+    for st in steps:
+        typ, tool, status = st["type"], st["tool"], st.get("status")
+        if typ == "observe":
+            if tool and tool in last_status:
+                progress_since[tool] = True
+            else:
+                for t in last_status:
+                    progress_since[t] = True
+            continue
+        if typ in ("verify", "final"):
+            for t in last_status:
+                progress_since[t] = True
+            continue
+        if typ in ("action", "retry", "fallback") and tool:
+            for t in last_status:
+                if t != tool:
+                    progress_since[t] = True
+            status_norm = status or "ok"
+            prev = last_status.get(tool)
+            paged = prev in _CONTINUE_STATUSES and status_norm in _CONTINUE_STATUSES
+            if prev is not None and prev == status_norm and not progress_since.get(tool, False) and not paged:
+                redundant += 1
+                counts[tool] = counts.get(tool, 1) + 1
+            last_status[tool] = status_norm
+            progress_since[tool] = False
+        # A bare 'error' step restates a failure; it is not progress.
+    return redundant, counts
+
+
 def score_steps(goal: str, steps: list, outcome: str) -> dict:
     """Score a privacy-light trace (step types + statuses only). Same dimensions/weights/caps as score_trace."""
     issues, suggestions, dimensions, caps = [], [], {}, []
@@ -483,17 +537,10 @@ def score_steps(goal: str, steps: list, outcome: str) -> dict:
         issues.append("Goal category is missing.")
         suggestions.append("Send a generic goal category (e.g. 'data lookup', 'booking', 'code change').")
 
-    # 2. Efficiency: the same tool called again without an error/retry in between or a 'partial' status before it
-    last_status, redundant, counts, prev_error = {}, 0, {}, False
-    for st in steps:
-        tool = st["tool"]
-        if st["type"] in ("action", "retry", "fallback") and tool:
-            if tool in last_status and st["type"] == "action" and not prev_error \
-                    and last_status[tool] not in _CONTINUE_STATUSES and last_status[tool] not in _ERROR_STATUSES:
-                redundant += 1
-                counts[tool] = counts.get(tool, 1) + 1
-            last_status[tool] = st["status"] or "ok"
-        prev_error = _is_error_step(st)
+    # 2. Efficiency: a loop is only truly identical repetition — same tool AND same status,
+    # with no new observe/progress in between. Status changes and observes are progress.
+    # Pagination (status 'partial') is not a loop. Identical failing calls ARE a loop.
+    redundant, counts = _count_identical_repeats(steps)
     distinct = n - redundant
 
     # 3. Observability: enough distinct steps, and a status recorded on actions
@@ -518,13 +565,13 @@ def score_steps(goal: str, steps: list, outcome: str) -> dict:
         eff -= min(80, 15 * redundant)
         top, top_n = max(counts.items(), key=lambda kv: kv[1])
         if redundant >= 2 or redundant / n >= 0.3:
-            issues.append(f"Loop detected: {redundant} repeated call(s) of the same tool without an error or new "
-                          f"information in between (e.g. '{top}' x{top_n}).")
-            suggestions.append("Before repeating a call, check whether its last result changes your plan; change the "
-                               "tool/parameters or stop. Mark paged results with status 'partial' so they are not a loop.")
+            issues.append(f"Loop detected: {redundant} identical repeat(s) of the same tool and status with no new "
+                          f"observe/progress in between (e.g. '{top}' x{top_n}).")
+            suggestions.append("Before repeating an identical call, use the earlier result or change the tool/parameters. "
+                               "A new status or an observe in between is progress, not a loop. Mark paged results 'partial'.")
         else:
-            issues.append(f"Redundant step: tool '{top}' was called again after a successful result.")
-            suggestions.append("Reuse the earlier result instead of repeating a successful call.")
+            issues.append(f"Redundant step: tool '{top}' was called again with the same status and no new progress.")
+            suggestions.append("Reuse the earlier result instead of repeating an identical call.")
         if redundant >= 3 and redundant / n >= 0.4:
             caps.append((45, "most of the trace is a repeat loop"))
     dimensions["efficiency"] = max(0, eff)
@@ -588,7 +635,7 @@ def score_trace(goal: str, trace, outcome: str) -> dict:
         return actionable_error(
             "Malformed input: goal and outcome must be strings, "
             "trace must be a string or a list of steps.",
-            hint="Call get_trace_schema, then send step types only as in example.mcp or example.a2a.",
+            hint="Call get_trace_schema, then send step types only as in example.",
         )
     steps = _parse_steps(trace)
     if steps is not None:
@@ -737,6 +784,7 @@ def _finish(dimensions: dict, issues: list, suggestions: list, caps: list, priva
         "dimensions": dimensions,
         "privacy_mode": privacy_mode,
         "version": VERSION,
+        "scoring_version": SCORING_VERSION,
     }
 
 
@@ -767,6 +815,39 @@ def record_call(trace, agent_name: str, result: dict, client: dict | None = None
     logger.info(f"Evaluated trace from {agent_name}: score={result['score']}")
 
 
+
+def _did_you_mean(name: str, known: list[str]) -> str | None:
+    import difflib
+    hits = difflib.get_close_matches(name or "", known, n=1, cutoff=0.5)
+    return hits[0] if hits else None
+
+
+def _install_unknown_tool_hint() -> None:
+    """Turn an unknown tools/call into a short hint listing valid tools (and a did-you-mean)."""
+    original = mcp.call_tool
+
+    async def call_tool(name: str, arguments: dict, context=None):
+        try:
+            return await original(name, arguments, context)
+        except ToolError as exc:
+            if "Unknown tool" not in str(exc):
+                raise
+            known = [info.name for info in mcp._tool_manager.list_tools()]
+            suggestion = _did_you_mean(name, known)
+            hint = "Valid tools: " + ", ".join(known) + "."
+            if suggestion:
+                hint += f" Did you mean {suggestion}?"
+            raise ToolError(json.dumps(actionable_error(
+                f"Unknown tool: {name}.",
+                hint=hint,
+            ))) from exc
+
+    mcp.call_tool = call_tool  # type: ignore[method-assign]
+
+
+_install_unknown_tool_hint()
+
+
 # ---------------------------------------------------------------------------
 # HTTP transport: MCP at /mcp, plus discovery + health + minimal A2A endpoint
 # ---------------------------------------------------------------------------
@@ -793,10 +874,7 @@ def _help_json(request: Request, error: str, status: int = 404, *, hint: str | N
         lines = [
             payload["error"],
             payload["hint"],
-            "Example MCP: POST /mcp " + json.dumps(payload["example"]["mcp"]),
-            "Example A2A: POST /a2a/message:send " + json.dumps(payload["example"]["a2a"]),
-            "How to check your trace in 3 steps:",
-            *[f"{i}. {step}" for i, step in enumerate(payload["how_to"], 1)],
+            "Example: " + json.dumps(payload["example"]),
             "Docs: " + payload["docs"],
         ]
         return PlainTextResponse("\n".join(lines) + "\n", status_code=status)
@@ -1000,19 +1078,9 @@ def _missing_args_error(goal, trace, outcome) -> dict:
     missing = [n for n, v in (("goal", goal), ("trace", trace), ("outcome", outcome)) if not _has_value(v)]
     if not missing:
         missing = ["goal", "trace", "outcome"]
-    example = TRACE_SCHEMA["privacy_light_format"]["example_call"]
-    compact = TRACE_SCHEMA["privacy_light_format"]["example_compact_trace"]
     return actionable_error(
-        "Missing required field(s): " + ", ".join(missing) + ". "
-        "Here is a ready-to-use example you can send as the next evaluate_trace call.",
-        hint="Call get_trace_schema, then retry with example.mcp or example.a2a (step types only).",
-        example_call=example,
-        example_compact_trace=compact,
-        suggestions=[
-            "Retry evaluate_trace with the example_call as arguments (or substitute your own step types).",
-            "Privacy-light is enough: goal = a category such as 'data lookup', "
-            "trace = 'action:search ok > error > retry > verify passed', outcome = 'success'.",
-        ],
+        "Missing required field(s): " + ", ".join(missing) + ".",
+        hint="Call get_trace_schema, then send step types only as in example (goal, trace, outcome).",
     )
 
 
@@ -1233,6 +1301,7 @@ async def unknown_path(request: Request):
         f"Unknown path: {path}",
         404,
         hint="Use POST /mcp for MCP, POST /a2a/message:send or POST /a2a for A2A, or GET /.well-known/agent-card.json, /llms.txt, /health.",
+        reason="unknown_path",
         path=path,
     )
 
@@ -1337,6 +1406,49 @@ def _set_header(headers: list, name: bytes, value: bytes) -> list:
     return out
 
 
+
+class McpGetHelp:
+    """Plain GET /mcp (no SSE Accept) returns short JSON help instead of an SSE stream that hangs."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if (
+            scope["type"] == "http"
+            and scope.get("method") == "GET"
+            and _is_mcp_endpoint(scope.get("path", ""))
+        ):
+            headers = {k.decode("latin1").lower(): v.decode("latin1") for k, v in (scope.get("headers") or [])}
+            accept = headers.get("accept", "")
+            # Only real streamable-HTTP clients that explicitly ask for SSE get the stream.
+            # curl's default Accept: */* and browser GETs must not hang on a ping stream.
+            if "text/event-stream" not in accept.lower():
+                help_body = actionable_error(
+                    "GET /mcp is the MCP streamable-HTTP endpoint; it is not a page.",
+                    hint="POST JSON-RPC (initialize, then tools/call) to /mcp. For a document, GET /llms.txt. "
+                         "A GET with Accept: text/event-stream opens the SSE stream.",
+                    base=_scope_base(scope),
+                )
+                raw = json.dumps(help_body).encode()
+                await send({
+                    "type": "http.response.start",
+                    "status": 200,
+                    "headers": [
+                        (b"content-type", b"application/json"),
+                        (b"content-length", str(len(raw)).encode()),
+                    ],
+                })
+                await send({"type": "http.response.body", "body": raw, "more_body": False})
+                return
+        await self.app(scope, receive, send)
+
+
+def _is_mcp_endpoint(path: str) -> bool:
+    """True only for /mcp and /mcp/..., not lookalikes such as /mcpx."""
+    return path == "/mcp" or path.startswith("/mcp/")
+
+
 class McpRejectLogger:
     """Log a short reason code for /mcp 4xx (no request content) and attach actionable help to the body."""
 
@@ -1344,7 +1456,7 @@ class McpRejectLogger:
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or not scope.get("path", "").startswith("/mcp"):
+        if scope["type"] != "http" or not _is_mcp_endpoint(scope.get("path", "")):
             return await self.app(scope, receive, send)
         status = None
         headers = []
@@ -1394,7 +1506,7 @@ class ClientInfoSniffer:
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or scope.get("method") != "POST" or not scope.get("path", "").startswith("/mcp"):
+        if scope["type"] != "http" or scope.get("method") != "POST" or not _is_mcp_endpoint(scope.get("path", "")):
             return await self.app(scope, receive, send)
         chunks, more = [], True
         while more:
@@ -1441,10 +1553,11 @@ def build_http_app():
                        allow_headers=["*"], expose_headers=["mcp-session-id", "mcp-protocol-version"])
     app.add_middleware(ClientInfoSniffer)
     app.add_middleware(McpRejectLogger)
+    app.add_middleware(McpGetHelp)
     from starlette.exceptions import HTTPException
 
     async def _http_exception_handler(request, exc):
-        if request.url.path.startswith("/mcp"):
+        if _is_mcp_endpoint(request.url.path):
             # /mcp 4xx are handled by McpRejectLogger; keep the SDK response if Starlette raises.
             from starlette.responses import Response
             return Response(status_code=exc.status_code, headers=getattr(exc, "headers", None) or {})

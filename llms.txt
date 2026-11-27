@@ -39,7 +39,9 @@ curl -s -X POST https://tracecheck-mcp.onrender.com/a2a/message:send -H 'Content
   -d '{"message":{"role":"ROLE_USER","messageId":"1","parts":[{"data":{"goal":"data lookup","trace":"action:search ok > verify passed","outcome":"success"}}]}}'
 ```
 
-Returns JSON: score (0-100), dimensions (goal_clarity, observability, error_recovery, goal_alignment, efficiency), issues, suggestions, summary, privacy_mode, version.
+Returns JSON: score (0-100), dimensions (goal_clarity, observability, error_recovery, goal_alignment, efficiency), issues, suggestions, summary, privacy_mode, version, scoring_version.
+
+A free-text trace with content is optional and not recommended; prefer the privacy-light example above (step types only). Call `get_trace_schema` if you need the content form.
 
 ## Use with your framework (copy-paste configs)
 
