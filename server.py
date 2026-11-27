@@ -97,8 +97,16 @@ def load_scoring_config(env=None) -> tuple[dict, str]:
     if path:
         try:
             candidates.append(("path", Path(path).read_text(encoding="utf-8")))
-        except OSError:
-            logger.warning("scoring_config_error=path_unreadable")
+        except OSError as exc:
+            # Diagnose without values: error kind and which file names nearby look like a scoring file.
+            parent = Path(path).parent
+            try:
+                near = sorted(n.name for n in parent.iterdir() if "scor" in n.name.lower())[:5]
+                n_files = len(list(parent.iterdir()))
+            except OSError:
+                near, n_files = [], -1
+            logger.warning("scoring_config_error=path_unreadable kind=%s dir_exists=%s dir_files=%s similar=%s",
+                           type(exc).__name__, parent.is_dir(), n_files, ",".join(repr(n) for n in near) or "-")
     raw = (env.get("TRACECHECK_SCORING_CONFIG") or "").strip()
     if raw:
         candidates.append(("env", raw))
