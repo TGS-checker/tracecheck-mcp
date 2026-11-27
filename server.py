@@ -70,6 +70,8 @@ LIVE_URL = "https://tracecheck-mcp.onrender.com"
 # Actionable, machine-readable help returned on wrong or rejected calls (host principle).
 # Use-case signposts: only proven, live cases. Single source; docs/use-cases.md must match (tested).
 # Never put scoring rules, thresholds or detection details here. Register: private knowledge base.
+REGISTRY_DESCRIPTION = "Agent self-check: trace evaluation, 0-100 reliability score, loop detection, missing verification."  # = server.json
+
 LIVE_USE_CASES = {
     "UC-001": "Your agent claims success without checking that the result actually holds? "
               "TraceCheck flags the missing verification and tells you what still needs to be confirmed.",
@@ -1387,8 +1389,7 @@ async def mcp_well_known(request: Request):
     return JSONResponse({
         "name": "io.github.TGS-checker/tracecheck",
         "title": "TraceCheck",
-        "description": "Self-check for AI agents: verify your run, detect loops. "
-                       "No content needed: send step types only.",
+        "description": REGISTRY_DESCRIPTION,
         "version": VERSION,
         "transport": "streamable-http",
         "url": f"{base}/mcp",
