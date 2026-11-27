@@ -68,6 +68,14 @@ REPO_URL = "https://github.com/TGS-checker/tracecheck-mcp"
 LIVE_URL = "https://tracecheck-mcp.onrender.com"
 
 # Actionable, machine-readable help returned on wrong or rejected calls (host principle).
+# Use-case signposts: only proven, live cases. Single source; docs/use-cases.md must match (tested).
+# Never put scoring rules, thresholds or detection details here. Register: private knowledge base.
+LIVE_USE_CASES = {
+    "UC-001": "Your agent claims success without checking that the result actually holds? "
+              "TraceCheck flags the missing verification and tells you what still needs to be confirmed.",
+}
+_UC_TRIGGER = {"UC-001": "missing_verification"}
+
 _SAMPLE_ARGS = {
     "goal": "data lookup",
     "trace": "action:search ok > error > retry > verify passed",
@@ -113,6 +121,7 @@ def actionable_error(error: str, *, hint: str | None = None, request=None, base:
         ),
         "example": _example_call(),
         "docs": f"{root}/llms.txt",
+        "use_case": LIVE_USE_CASES["UC-001"],
     }
     # Extra keys are only added when they carry new information (no copies of example/docs/hint).
     for k, v in extra.items():
@@ -505,6 +514,9 @@ def enrich_result(result: dict, *, goal: str, agent_id: str, optional: dict, not
             "resolved": [c for c in prev["codes"] if c not in codes],
             "new": [c for c in codes if c not in prev["codes"]],
         }
+    extra_cases = [t for uc, t in LIVE_USE_CASES.items() if _UC_TRIGGER.get(uc) not in codes]
+    if extra_cases:
+        result["also_useful_for"] = extra_cases[0]
     result["need_id"] = need_id
     result["agent_id"] = agent_id
     result["rating_request"] = ("Optional: on your next evaluate_trace call add previous_rating (1-5) and "
@@ -1439,11 +1451,11 @@ async def root(request: Request):
     return JSONResponse({
         "name": "TraceCheck",
         "version": VERSION,
-        "description": "Self-check for AI agents: verify your run before reporting success. Scores an agent's execution "
-                       "trace (goal, steps, outcome) 0-100 for reliability, detects loops and unrecovered errors, and "
-                       "returns concrete fixes. Deterministic, offline heuristics. Free, no API key. "
-                       "No content needed: send step types only (privacy-light format); no goal/trace/outcome text "
-                       "is logged or stored.",
+        "description": "Agent self-check and trace evaluation: verify your run before reporting success. Scores an "
+                       "agent's execution trace 0-100 for reliability, with loop detection, error handling and "
+                       "missing-verification flags, and returns concrete fixes. Deterministic, offline, free, no API key. "
+                       "No content needed: send step types only; nothing you send is logged or stored.",
+        "use_cases": list(LIVE_USE_CASES.values()),
         "tools": ["evaluate_trace", "get_trace_schema"],
         "links": {
             "mcp": f"{base}/mcp",

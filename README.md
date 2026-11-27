@@ -18,6 +18,7 @@ Also listed in: [TensorBlock MCP Index](https://www.tensorblock.co/mcp/servers/g
 - MCP (streamable HTTP): `https://tracecheck-mcp.onrender.com/mcp`, tools `evaluate_trace`, `get_trace_schema`
 - A2A: agent card at `https://tracecheck-mcp.onrender.com/.well-known/agent-card.json`, `POST /a2a/message:send` (HTTP+JSON) or JSON-RPC `message/send` at `POST /a2a`
 - Drop-in self-check for agent frameworks: [docs/self-check.md](docs/self-check.md)
+- What agents use it for: [docs/use-cases.md](docs/use-cases.md)
 - Spec (request, response, issue codes, fix ids, privacy): [SPEC.md](SPEC.md) · Architecture: [ARCHITECTURE.md](ARCHITECTURE.md) · Security: [SECURITY.md](SECURITY.md)
 - Summary for agents ([llms.txt](https://llmstxt.org/)): `https://tracecheck-mcp.onrender.com/llms.txt`
 
