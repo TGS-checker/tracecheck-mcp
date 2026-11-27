@@ -67,7 +67,15 @@ ICONS = [
     Icon(src=f"{_ICON_RAW}/icon.svg", mime_type="image/svg+xml", sizes=["any"]),
 ]
 # Read-only, deterministic, offline scoring: safe for agents to call freely.
-_READ_ONLY = dict(read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False)
+# All four MCP annotation hints are set explicitly as booleans. The SDK
+# serializes them on tools/list as camelCase: readOnlyHint, destructiveHint,
+# idempotentHint, openWorldHint (required by the OpenAI directory and similar scanners).
+_READ_ONLY = dict(
+    read_only_hint=True,
+    destructive_hint=False,
+    idempotent_hint=True,
+    open_world_hint=False,
+)
 
 mcp = MCPServer(
     "TraceCheck",
@@ -509,6 +517,15 @@ def score_steps(goal: str, steps: list, outcome: str) -> dict:
 
 def score_trace(goal: str, trace, outcome: str) -> dict:
     """Dispatch: privacy-light step format -> score_steps, free text -> heuristic text scoring."""
+    if not isinstance(goal, str) or not isinstance(outcome, str) or not isinstance(trace, (str, list)):
+        return {
+            "error": (
+                "Malformed input: goal and outcome must be strings, "
+                "trace must be a string or a list of steps."
+            ),
+            "hint": "Call get_trace_schema for the full format.",
+            "version": VERSION,
+        }
     steps = _parse_steps(trace)
     if steps is not None:
         return score_steps(goal, steps, outcome)

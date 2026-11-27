@@ -26,3 +26,11 @@ bypass-selection = true
 
 [tool.hatch.build.targets.sdist]
 include = ["server.py", "agent-card.json", "assets/", "packaging/__init__.py", "README.md", "LICENSE", "examples/"]
+
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

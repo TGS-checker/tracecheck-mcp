@@ -4,3 +4,5 @@ calls.jsonl
 examples/calls.example.jsonl
 dist/
 original/
+.pytest_cache/
+tests/.calls.jsonl
