@@ -83,3 +83,42 @@ def test_identical_failing_shell_calls_are_a_loop():
     assert result["dimensions"]["error_recovery"] == 0
     assert result["score"] <= 40  # false-success cap kept
     assert any("success" in i.lower() and "unresolved" in i.lower() for i in result["issues"])
+
+
+
+def test_two_shell_ok_without_label_is_not_a_loop():
+    """Privacy-light cannot tell different shell commands apart; give the benefit of the doubt."""
+    trace = [
+        {"type": "action", "tool": "shell", "status": "ok"},
+        {"type": "action", "tool": "shell", "status": "ok"},
+        {"type": "final"},
+    ]
+    result = server.score_trace("code change", trace, "success")
+    issues = " ".join(result["issues"]).lower()
+    assert "loop detected" not in issues
+    assert "redundant" not in issues
+    assert result["dimensions"]["efficiency"] >= 80
+
+
+def test_same_label_and_status_is_a_real_repeat():
+    trace = [
+        {"type": "action", "tool": "shell", "status": "ok", "label": "install-deps"},
+        {"type": "action", "tool": "shell", "status": "ok", "target_hash": "install-deps"},
+        {"type": "final"},
+    ]
+    result = server.score_trace("code change", trace, "success")
+    issues = " ".join(result["issues"]).lower()
+    assert "loop detected" in issues or "redundant" in issues
+    assert result["dimensions"]["efficiency"] < 100
+
+
+def test_different_labels_are_not_a_loop():
+    trace = [
+        {"type": "action", "tool": "shell", "status": "ok", "label": "build"},
+        {"type": "action", "tool": "shell", "status": "ok", "label": "test"},
+        {"type": "final"},
+    ]
+    result = server.score_trace("code change", trace, "success")
+    issues = " ".join(result["issues"]).lower()
+    assert "loop detected" not in issues
+    assert "redundant" not in issues

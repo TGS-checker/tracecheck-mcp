@@ -54,7 +54,7 @@ except OSError:  # e.g. installed via uvx/pip on a machine without /workspace
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
 VERSION = "0.4.3"
-SCORING_VERSION = "0.4.4"  # loop detector: identical tool+status only; no version bump of the service
+SCORING_VERSION = "0.4.5"  # ok repeats need a label/target_hash; service version stays 0.4.3
 # stdout carries JSON-RPC in stdio mode, so call lines go to stdout only in HTTP mode (set in main()).
 _CALL_STREAM = sys.stderr
 
@@ -179,10 +179,11 @@ TRACE_SCHEMA = {
     "scoring_version": SCORING_VERSION,
     "arguments": {
         "goal": "string, required. Default (privacy-light): a generic category, e.g. 'data lookup'.",
-        "trace": "required. Default: step types only — a list [{type, tool?, status?}] or compact "
+        "trace": "required. Default: step types only — a list [{type, tool?, status?, label? or target_hash?}] or compact "
                  "'action:search ok > error > retry > verify passed'. Types: action, observe, error, retry, "
                  "fallback, verify, final. Statuses: ok, partial, empty, error/failed, passed. "
-                 "A free-text content trace is optional and not recommended.",
+                 "Optional per-step label or target_hash: same value + status is a real repeat; without it, "
+                 "successful same-tool steps are not flagged as a loop. Content fields are optional.",
         "outcome": "string, required. Default: a status ('success', 'partial' or 'failed').",
         "agent_name": "string, optional. Your identifier, used for logging only.",
     },
@@ -191,31 +192,21 @@ TRACE_SCHEMA = {
     "privacy_light_format": {
         "note": "Default and recommended. No content needed: send step types only. Nothing you send is logged or stored (only score + counts).",
         "goal": "a generic category, e.g. 'data lookup', 'booking', 'code change'",
-        "trace": "list of steps {type, tool?, status?} OR compact string 'type[:tool] [status] > ...'. "
-                 "Types: action, observe, error, retry, fallback, verify, final. Statuses: ok, partial, empty, error/failed, passed.",
+        "trace": "list of steps {type, tool?, status?, label? or target_hash?} OR compact string 'type[:tool] [status] > ...'. "
+                 "Types: action, observe, error, retry, fallback, verify, final. Statuses: ok, partial, empty, error/failed, passed. "
+                 "label/target_hash (optional): when two steps share the same value and status, that is a real repeat; "
+                 "if omitted, successful same-tool same-status steps get the benefit of the doubt.",
         "outcome": "a status: 'success', 'partial' or 'failed' (optionally a category)",
         "example_call": _PRIVACY_LIGHT_EXAMPLE,
         "example_compact_trace": _PRIVACY_LIGHT_COMPACT,
     },
-    "example_call_with_content": {
-        "note": "Optional and not recommended. Only if you choose to send content. Prefer example_call (step types only).",
-        "goal": "Find the cheapest direct flight from Amsterdam to Lisbon on 12 March and report price and flight number.",
-        "trace": (
-            "1. Called search_flights(from=AMS, to=LIS, date=2027-03-12, direct=true).\n"
-            "2. Observed: returned 4 direct flights; cheapest KL1693 at EUR 89.\n"
-            "3. Called get_fare_details(KL1693) -> error: timeout.\n"
-            "4. Retried get_fare_details(KL1693) -> returned EUR 89 incl. taxes, 1 seat left.\n"
-            "5. Verified: price and direct status match the goal (cheapest direct on 12 March)."
-        ),
-        "outcome": "Cheapest direct flight found: KL1693 AMS->LIS on 12 March, EUR 89 including taxes.",
-        "agent_name": "my-travel-agent",
-    },
+    "content_fields": "Optional. Prefer step types only; free-text content is not required.",
     "scored_dimensions": {
         "goal_clarity": "weight 0.10 - is the goal specific and action-oriented (a category is enough in privacy-light)",
         "observability": "weight 0.25 - enough distinct (non-repeated) steps, observations of tool results recorded",
         "error_recovery": "weight 0.20 - every error is followed by a visible retry/fallback/fix or verification",
         "goal_alignment": "weight 0.30 - outcome matches goal, success claims backed by evidence, explicit verification step",
-        "efficiency": "weight 0.15 - no identical repeats of the same tool and status without observe/progress in between",
+        "efficiency": "weight 0.15 - no evidenced repeats (same label/target_hash and status) or unlabeled identical failing calls",
     },
     "loop": "run task -> evaluate_trace -> apply suggestions -> re-run -> evaluate_trace again; compare score and dimensions.",
 }
@@ -471,8 +462,11 @@ def _parse_steps(trace) -> list | None:
             return None
         tool = st.get("tool") or st.get("name")
         status = st.get("status")
+        evidence = st.get("label") or st.get("target_hash") or st.get("targetHash")
+        evidence = str(evidence).strip()[:80] if evidence else None
         out.append({"type": typ, "tool": str(tool).strip().lower()[:60] if tool else None,
-                    "status": str(status).strip().lower().replace(" ", "_")[:30] if status is not None else None})
+                    "status": str(status).strip().lower().replace(" ", "_")[:30] if status is not None else None,
+                    "label": evidence or None})
     return out
 
 
@@ -485,17 +479,22 @@ def _is_error_step(st: dict) -> bool:
 def _count_identical_repeats(steps: list) -> tuple[int, dict]:
     """Return (redundant_count, counts_by_tool).
 
-    A loop is only the same tool AND the same status, with no new observe/progress
-    between those calls. An observe, a status change, a verify/final, or a call of a
-    different tool counts as progress. Status 'partial' (pagination) is never a loop.
-    Identical failing calls (e.g. action:shell error repeated) ARE a loop.
+    In privacy-light mode, different successful shell/tool calls cannot be told
+    apart, so same-tool same-status *ok* steps are not flagged without evidence.
+    Evidence is an optional per-step `label` or `target_hash`: when both sides
+    have the same value and status, that is a real repeat. Identical failing
+    calls (same tool, error status, no new progress) still count as a loop
+    even without a label. Pagination (status 'partial') is never a loop.
+    Observes, status changes, verify/final, or a different tool are progress.
     """
     last_status: dict = {}
+    last_label: dict = {}
     progress_since: dict = {}
     redundant = 0
     counts: dict = {}
     for st in steps:
         typ, tool, status = st["type"], st["tool"], st.get("status")
+        label = st.get("label")
         if typ == "observe":
             if tool and tool in last_status:
                 progress_since[tool] = True
@@ -513,11 +512,17 @@ def _count_identical_repeats(steps: list) -> tuple[int, dict]:
                     progress_since[t] = True
             status_norm = status or "ok"
             prev = last_status.get(tool)
+            prev_label = last_label.get(tool)
             paged = prev in _CONTINUE_STATUSES and status_norm in _CONTINUE_STATUSES
-            if prev is not None and prev == status_norm and not progress_since.get(tool, False) and not paged:
-                redundant += 1
-                counts[tool] = counts.get(tool, 1) + 1
+            same = prev is not None and prev == status_norm and not progress_since.get(tool, False) and not paged
+            if same:
+                evidenced = bool(prev_label and label and prev_label == label)
+                unlabeled_error = (not prev_label and not label and status_norm in _ERROR_STATUSES)
+                if evidenced or unlabeled_error:
+                    redundant += 1
+                    counts[tool] = counts.get(tool, 1) + 1
             last_status[tool] = status_norm
+            last_label[tool] = label
             progress_since[tool] = False
         # A bare 'error' step restates a failure; it is not progress.
     return redundant, counts
@@ -537,9 +542,7 @@ def score_steps(goal: str, steps: list, outcome: str) -> dict:
         issues.append("Goal category is missing.")
         suggestions.append("Send a generic goal category (e.g. 'data lookup', 'booking', 'code change').")
 
-    # 2. Efficiency: a loop is only truly identical repetition — same tool AND same status,
-    # with no new observe/progress in between. Status changes and observes are progress.
-    # Pagination (status 'partial') is not a loop. Identical failing calls ARE a loop.
+    # 2. Efficiency: see _count_identical_repeats (ok repeats need a label/target_hash).
     redundant, counts = _count_identical_repeats(steps)
     distinct = n - redundant
 
@@ -915,7 +918,7 @@ async def agent_card_legacy(request: Request):
 
 @mcp.custom_route("/health", methods=["GET"])
 async def health(request: Request):
-    return JSONResponse({"status": "ok", "service": "tracecheck", "version": VERSION})
+    return JSONResponse({"status": "ok", "service": "tracecheck", "version": VERSION, "scoring_version": SCORING_VERSION})
 
 
 @mcp.custom_route("/a2a/health", methods=["GET"])
@@ -1408,7 +1411,7 @@ def _set_header(headers: list, name: bytes, value: bytes) -> list:
 
 
 class McpGetHelp:
-    """Plain GET /mcp (no SSE Accept) returns short JSON help instead of an SSE stream that hangs."""
+    """GET /mcp always returns 405 immediately. We offer no server-initiated SSE stream."""
 
     def __init__(self, app):
         self.app = app
@@ -1419,28 +1422,23 @@ class McpGetHelp:
             and scope.get("method") == "GET"
             and _is_mcp_endpoint(scope.get("path", ""))
         ):
-            headers = {k.decode("latin1").lower(): v.decode("latin1") for k, v in (scope.get("headers") or [])}
-            accept = headers.get("accept", "")
-            # Only real streamable-HTTP clients that explicitly ask for SSE get the stream.
-            # curl's default Accept: */* and browser GETs must not hang on a ping stream.
-            if "text/event-stream" not in accept.lower():
-                help_body = actionable_error(
-                    "GET /mcp is the MCP streamable-HTTP endpoint; it is not a page.",
-                    hint="POST JSON-RPC (initialize, then tools/call) to /mcp. For a document, GET /llms.txt. "
-                         "A GET with Accept: text/event-stream opens the SSE stream.",
-                    base=_scope_base(scope),
-                )
-                raw = json.dumps(help_body).encode()
-                await send({
-                    "type": "http.response.start",
-                    "status": 200,
-                    "headers": [
-                        (b"content-type", b"application/json"),
-                        (b"content-length", str(len(raw)).encode()),
-                    ],
-                })
-                await send({"type": "http.response.body", "body": raw, "more_body": False})
-                return
+            help_body = actionable_error(
+                "GET /mcp is not supported. Use POST.",
+                hint="POST JSON-RPC (initialize, then tools/call) to /mcp. For a document, GET /llms.txt.",
+                base=_scope_base(scope),
+            )
+            raw = json.dumps(help_body).encode()
+            await send({
+                "type": "http.response.start",
+                "status": 405,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(raw)).encode()),
+                    (b"allow", b"POST"),
+                ],
+            })
+            await send({"type": "http.response.body", "body": raw, "more_body": False})
+            return
         await self.app(scope, receive, send)
 
 

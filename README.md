@@ -104,20 +104,11 @@ Default and recommended: **privacy-light** (no content needed). Send step types 
 Compact string form of the same trace: `"action:search ok > action:fetch_details error > retry:fetch_details ok > verify passed"` (segments `type[:tool] [status]`, separated by `>` or newlines).
 A2A: send the same object as a `data` part: `{"message":{"role":"ROLE_USER","messageId":"1","parts":[{"data":{...}}]}}`.
 - Types: `action`, `observe`, `error`, `retry`, `fallback`, `verify`, `final`. Statuses: `ok`, `partial`, `empty`, `error`/`failed`/`timeout`, `passed`/`failed` (verify).
-- A loop is only an identical repeat of the same tool and status with no new observe/progress in between. Status `partial` is pagination, not a loop. Identical failing calls are a loop. Every error needs a later `retry`/`fallback`, a successful call of the same tool, or a passed `verify`. Claiming `success` over unresolved errors is capped at 40.
+- A loop is an evidenced repeat (same optional `label`/`target_hash` and status) or unlabeled identical failing calls. Status `partial` is pagination, not a loop. Successful same-tool steps without a label are not flagged. Every error needs a later `retry`/`fallback`, a successful call of the same tool, or a passed `verify`. Claiming `success` over unresolved errors is capped at 40.
 - Tool names are only used inside the scoring of that call. They are not logged. Use generic names if you prefer.
 - The response includes `"privacy_mode": true` when this format was detected.
 
-### Optional content example (not recommended)
-A free-text trace with content is optional and not recommended. Prefer step types only. If you still send content, `trace` is chronological steps, one per line: what you called, what it **returned/observed**, any error **and the retry/fallback**, and a final `Verified: ...` line.
-```json
-{
-  "goal": "Find the cheapest direct flight from Amsterdam to Lisbon on 12 March and report price and flight number.",
-  "trace": "1. Called search_flights(AMS->LIS, 2027-03-12, direct)\n2. Observed: returned 4 flights; cheapest KL1693 EUR 89\n3. get_fare_details -> error: timeout\n4. Retried -> returned EUR 89 incl. taxes\n5. Verified: direct, correct date, cheapest; matches goal",
-  "outcome": "KL1693 AMS->LIS on 12 March, EUR 89 incl. taxes.",
-  "agent_name": "my-agent"
-}
-```
+Content fields are optional; prefer step types only. Optional per-step `label` or `target_hash` marks a real repeat when two steps share the same value and status; without it, successful same-tool steps are not flagged as a loop.
 
 ## Privacy: what is logged
 Since v0.4 TraceCheck stores **no content**: no goal, trace or outcome text, and no tool names. Each call writes one line (to `calls.jsonl` and, in HTTP mode, `TRACECHECK_CALL {json}` to stdout / Render logs) with only:

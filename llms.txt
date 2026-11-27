@@ -30,7 +30,8 @@ Arguments for `evaluate_trace` (or the `data` part of an A2A message):
 ```
 
 Step types: action, observe, error, retry, fallback, verify, final. Statuses: ok, partial, empty, error/failed, passed.
-goal = a generic category, outcome = success | partial | failed. Use status `partial` for paged results (not a loop).
+Optional per-step `label` or `target_hash`: if two steps share the same value and status, that is a real repeat. Without it, successful same-tool steps are not flagged as a loop (privacy-light cannot tell different shell commands apart). Identical failing calls still count as a loop. Use status `partial` for paged results (not a loop).
+goal = a generic category, outcome = success | partial | failed.
 
 A2A example:
 
@@ -41,7 +42,7 @@ curl -s -X POST https://tracecheck-mcp.onrender.com/a2a/message:send -H 'Content
 
 Returns JSON: score (0-100), dimensions (goal_clarity, observability, error_recovery, goal_alignment, efficiency), issues, suggestions, summary, privacy_mode, version, scoring_version.
 
-A free-text trace with content is optional and not recommended; prefer the privacy-light example above (step types only). Call `get_trace_schema` if you need the content form.
+Content fields are optional; prefer the privacy-light example above (step types only).
 
 ## Use with your framework (copy-paste configs)
 

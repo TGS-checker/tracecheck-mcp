@@ -134,26 +134,26 @@ def _rpc(client, method, params=None, sid=None, id_=1):
     return r
 
 
-def test_get_mcp_plain_json_help_does_not_hang(client):
+def test_get_mcp_returns_405_with_allow_post(client):
     r = client.get("/mcp", headers={"Accept": "application/json"})
-    assert r.status_code == 200
+    assert r.status_code == 405
+    assert "POST" in r.headers.get("allow", "")
     data = r.json()
     assert_actionable(data)
-    assert "/mcp" in data["error"] or "MCP" in data["error"]
+    assert "POST" in (data.get("error") or "") + (data.get("hint") or "")
     assert "llms.txt" in data["docs"]
 
 
-def test_get_mcp_with_sse_accept_is_passed_to_the_stream(client):
-    """Real streamable-HTTP clients that ask for SSE must not get the plain JSON help page."""
+def test_get_mcp_with_sse_accept_is_405_and_opens_no_stream(client):
+    """MCP clients that send Accept: text/event-stream must not hang on a server-initiated SSE stream."""
     import asyncio
 
     seen = []
     recorded = []
 
     async def fake_app(scope, receive, send):
-        seen.append(scope.get("path"))
-        await send({"type": "http.response.start", "status": 204, "headers": []})
-        await send({"type": "http.response.body", "body": b"", "more_body": False})
+        seen.append(True)
+        raise AssertionError("GET /mcp must not reach the SSE stream handler")
 
     async def send(message):
         recorded.append(message)
@@ -161,7 +161,7 @@ def test_get_mcp_with_sse_accept_is_passed_to_the_stream(client):
     async def receive():
         return {"type": "http.disconnect"}
 
-    async def run2():
+    async def run():
         mw = server.McpGetHelp(fake_app)
         scope = {
             "type": "http",
@@ -171,9 +171,25 @@ def test_get_mcp_with_sse_accept_is_passed_to_the_stream(client):
         }
         await mw(scope, receive, send)
 
-    asyncio.run(run2())
-    assert seen == ["/mcp"], "SSE Accept should reach the MCP stream handler, not the JSON help page"
-    assert recorded and recorded[0].get("status") == 204
+    asyncio.run(run())
+    assert not seen
+    assert recorded and recorded[0].get("status") == 405
+    allow = {k: v for k, v in recorded[0].get("headers") or []}
+    assert allow.get(b"allow") == b"POST"
+
+    r = client.get("/mcp", headers={"Accept": "text/event-stream"})
+    assert r.status_code == 405
+    assert "POST" in r.headers.get("allow", "")
+    assert "text/event-stream" not in r.headers.get("content-type", "")
+    assert_actionable(r.json())
+
+
+def test_health_includes_scoring_version(client):
+    r = client.get("/health")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["version"] == server.VERSION
+    assert data["scoring_version"] == server.SCORING_VERSION
 
 
 def test_unknown_path_mcpx_is_unknown_path_not_session(client):
@@ -233,6 +249,7 @@ def test_schema_leads_with_privacy_light_example():
     assert example["goal"] == "data lookup"
     assert example["outcome"] == "success"
     assert schema.get("recommended_format") == "privacy_light"
-    content = schema.get("example_call_with_content") or {}
-    note = (content.get("note") or "").lower()
-    assert "not recommended" in note or "optional" in note
+    assert "example_call_with_content" not in schema
+    note = json.dumps(schema.get("content_fields") or "").lower()
+    assert "optional" in note
+    assert "label" in json.dumps(schema).lower() or "target_hash" in json.dumps(schema).lower()
