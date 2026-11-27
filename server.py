@@ -61,6 +61,67 @@ logger = logging.getLogger("tracecheck")
 
 REPO_URL = "https://github.com/TGS-checker/tracecheck-mcp"
 LIVE_URL = "https://tracecheck-mcp.onrender.com"
+
+# Actionable, machine-readable help returned on wrong or rejected calls (host principle).
+_SAMPLE_ARGS = {
+    "goal": "data lookup",
+    "trace": "action:search ok > error > retry > verify passed",
+    "outcome": "success",
+}
+HOW_TO_CHECK_TRACE = [
+    "Call get_trace_schema for the exact input format and a copy-paste example.",
+    "Send step types only (privacy-light), e.g. 'action:search ok > error > retry > verify passed'.",
+    "Read the score (0-100), issues and suggestions; apply the fixes and evaluate again.",
+]
+
+
+def _service_base(request=None) -> str:
+    if request is not None:
+        return _public_base(request)
+    return (os.environ.get("PUBLIC_URL") or LIVE_URL).rstrip("/")
+
+
+def _help_links(base: str | None = None) -> dict:
+    root = (base or LIVE_URL).rstrip("/")
+    return {
+        "mcp": f"{root}/mcp",
+        "a2a_agent_card": f"{root}/.well-known/agent-card.json",
+        "a2a": f"{root}/a2a",
+        "llms_txt": f"{root}/llms.txt",
+        "health": f"{root}/health",
+    }
+
+
+def _example_calls() -> dict:
+    args = dict(_SAMPLE_ARGS)
+    return {
+        "mcp": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "evaluate_trace", "arguments": args},
+        },
+        "a2a": {
+            "endpoint": "/a2a/message:send",
+            "message": {"role": "user", "parts": [{"data": args}]},
+        },
+    }
+
+
+def actionable_error(error: str, *, hint: str | None = None, request=None, base: str | None = None, **extra) -> dict:
+    """Short JSON for agents: what went wrong, a working example, and 3 steps to check a trace."""
+    root = base or _service_base(request)
+    body = {
+        "error": error,
+        "hint": hint or "POST to /mcp (MCP tools/call) or /a2a/message:send (A2A).",
+        "example": _example_calls(),
+        "how_to": HOW_TO_CHECK_TRACE,
+        "docs": f"{root}/llms.txt",
+        "links": _help_links(root),
+        "version": VERSION,
+    }
+    body.update(extra)
+    return body
 _ICON_RAW = "https://raw.githubusercontent.com/TGS-checker/tracecheck-mcp/main/assets"
 ICONS = [
     Icon(src=f"{_ICON_RAW}/icon.png", mime_type="image/png", sizes=["256x256"]),
@@ -524,14 +585,11 @@ def score_steps(goal: str, steps: list, outcome: str) -> dict:
 def score_trace(goal: str, trace, outcome: str) -> dict:
     """Dispatch: privacy-light step format -> score_steps, free text -> heuristic text scoring."""
     if not isinstance(goal, str) or not isinstance(outcome, str) or not isinstance(trace, (str, list)):
-        return {
-            "error": (
-                "Malformed input: goal and outcome must be strings, "
-                "trace must be a string or a list of steps."
-            ),
-            "hint": "Call get_trace_schema for the full format.",
-            "version": VERSION,
-        }
+        return actionable_error(
+            "Malformed input: goal and outcome must be strings, "
+            "trace must be a string or a list of steps.",
+            hint="Call get_trace_schema, then send step types only as in example.mcp or example.a2a.",
+        )
     steps = _parse_steps(trace)
     if steps is not None:
         return score_steps(goal, steps, outcome)
@@ -727,6 +785,39 @@ def _public_base(request: Request) -> str:
     return f"{proto}://{host}"
 
 
+def _help_json(request: Request, error: str, status: int = 404, *, hint: str | None = None, **extra) -> JSONResponse:
+    from starlette.responses import PlainTextResponse
+    payload = actionable_error(error, hint=hint, request=request, **extra)
+    accept = (request.headers.get("accept") or "").lower()
+    if "text/plain" in accept and "application/json" not in accept:
+        lines = [
+            payload["error"],
+            payload["hint"],
+            "Example MCP: POST /mcp " + json.dumps(payload["example"]["mcp"]),
+            "Example A2A: POST /a2a/message:send " + json.dumps(payload["example"]["a2a"]),
+            "How to check your trace in 3 steps:",
+            *[f"{i}. {step}" for i, step in enumerate(payload["how_to"], 1)],
+            "Docs: " + payload["docs"],
+        ]
+        return PlainTextResponse("\n".join(lines) + "\n", status_code=status)
+    return JSONResponse(payload, status_code=status)
+
+
+def _task_not_found_response(request: Request, task_id: str, rpc_id=None) -> JSONResponse:
+    help_body = actionable_error(
+        "Task not found.",
+        hint="TraceCheck does not persist tasks. Send a new evaluate request to /a2a/message:send or POST /a2a (JSON-RPC message/send).",
+        request=request,
+        taskId=task_id,
+        error_name="TaskNotFound",
+        code=-32001,
+    )
+    return JSONResponse(
+        {"jsonrpc": "2.0", "id": rpc_id, "error": {"code": -32001, "message": "TaskNotFound", "data": help_body}},
+        status_code=404,
+    )
+
+
 def _agent_card(request: Request) -> dict:
     card = json.loads(AGENT_CARD_FILE.read_text(encoding="utf-8"))
     base = _public_base(request)
@@ -911,21 +1002,18 @@ def _missing_args_error(goal, trace, outcome) -> dict:
         missing = ["goal", "trace", "outcome"]
     example = TRACE_SCHEMA["privacy_light_format"]["example_call"]
     compact = TRACE_SCHEMA["privacy_light_format"]["example_compact_trace"]
-    return {
-        "error": (
-            "Missing required field(s): " + ", ".join(missing) + ". "
-            "Here is a ready-to-use example you can send as the next evaluate_trace call."
-        ),
-        "example_call": example,
-        "example_compact_trace": compact,
-        "suggestions": [
+    return actionable_error(
+        "Missing required field(s): " + ", ".join(missing) + ". "
+        "Here is a ready-to-use example you can send as the next evaluate_trace call.",
+        hint="Call get_trace_schema, then retry with example.mcp or example.a2a (step types only).",
+        example_call=example,
+        example_compact_trace=compact,
+        suggestions=[
             "Retry evaluate_trace with the example_call as arguments (or substitute your own step types).",
             "Privacy-light is enough: goal = a category such as 'data lookup', "
             "trace = 'action:search ok > error > retry > verify passed', outcome = 'success'.",
         ],
-        "hint": "Call get_trace_schema for the full format.",
-        "version": VERSION,
-    }
+    )
 
 
 def _extract_args(message: dict) -> dict:
@@ -964,6 +1052,14 @@ def _complete_args(args: dict | None) -> dict | None:
     return out
 
 
+A2A_HELP = ("TraceCheck scores agent execution traces. Send one message part "
+            "{\"data\": {\"goal\": str, \"trace\": str, \"outcome\": str, \"agent_name\": str?}} "
+            "(or the same object as JSON text). trace = chronological steps, one per line, with what each tool "
+            "returned, errors with their recovery, and a final 'Verified:' line. No content needed: send step "
+            "types only, e.g. {\"goal\": \"data lookup\", \"trace\": \"action:search ok > error > retry > verify passed\", "
+            "\"outcome\": \"success\"}. Nothing you send is logged or stored.")
+
+
 def _a2a_help_parts() -> list:
     example = TRACE_SCHEMA["privacy_light_format"]["example_call"]
     compact = TRACE_SCHEMA["privacy_light_format"]["example_compact_trace"]
@@ -992,25 +1088,16 @@ def _a2a_http_message(request_message, parts) -> dict:
     }
 
 
-@mcp.custom_route("/a2a/message:send", methods=["POST"])
-async def a2a_send_message(request: Request):
-    """A2A v1.0 HTTP+JSON SendMessage -> evaluate_trace. Returns a Message with a data part.
 
-    A plain-text or otherwise unknown first call gets HTTP 200 with a help message
-    and a ready-to-use example (never 400). A compact privacy-light trace in the
-    text is scored immediately.
-    """
-    raw = await request.body()
+async def _a2a_http_from_parsed(request: Request, raw: bytes, body):
+    """A2A v1.0 HTTP+JSON SendMessage -> evaluate_trace (or a help reply, never 400)."""
     message = {}
     args = {}
-    body = None
-    try:
-        body = json.loads(raw) if raw else {}
-    except ValueError:
+    if body is None:
         text = raw.decode("utf-8", "replace").strip()
         if text:
             args = {"trace": text}
-    if isinstance(body, dict):
+    elif isinstance(body, dict):
         message = body.get("message") or {}
         if not message and (body.get("parts") or body.get("goal") or body.get("trace")):
             if "parts" in body:
@@ -1039,29 +1126,27 @@ async def a2a_send_message(request: Request):
     return JSONResponse(_a2a_http_message(message, _a2a_help_parts()), media_type="application/a2a+json")
 
 
-A2A_HELP = ("TraceCheck scores agent execution traces. Send one message part "
-            "{\"data\": {\"goal\": str, \"trace\": str, \"outcome\": str, \"agent_name\": str?}} "
-            "(or the same object as JSON text). trace = chronological steps, one per line, with what each tool "
-            "returned, errors with their recovery, and a final 'Verified:' line. No content needed: send step "
-            "types only, e.g. {\"goal\": \"data lookup\", \"trace\": \"action:search ok > error > retry > verify passed\", "
-            "\"outcome\": \"success\"}. Nothing you send is logged or stored.")
+_A2A_TASK_METHODS = {"tasks/get", "tasks/cancel", "tasks/resubscribe", "GetTask", "CancelTask", "TaskResubscription"}
 
 
-@mcp.custom_route("/a2a", methods=["POST"])
-async def a2a_jsonrpc(request: Request):
-    """A2A JSON-RPC binding (v0.3 `message/send`, v1.0 `SendMessage`) -> evaluate_trace.
-    Messages without a trace get a help reply (not an error), so generic A2A clients get a usable answer."""
-    try:
-        body = await request.json()
-    except ValueError:
-        return JSONResponse({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}})
+async def _a2a_jsonrpc_from_body(request: Request, body):
     if not isinstance(body, dict):
-        return JSONResponse({"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Invalid Request"}})
+        return JSONResponse({"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Invalid Request",
+                             "data": actionable_error("Invalid Request: JSON-RPC body must be an object.", request=request)}})
     rpc_id = body.get("id")
     method = body.get("method")
+    if method in _A2A_TASK_METHODS:
+        params = body.get("params") or {}
+        task_id = params.get("id") or params.get("taskId") or params.get("name") or "unknown"
+        return _task_not_found_response(request, str(task_id), rpc_id=rpc_id)
     if method not in ("message/send", "SendMessage"):
         return JSONResponse({"jsonrpc": "2.0", "id": rpc_id,
-                             "error": {"code": -32601, "message": f"Method not found: {method}. Supported: message/send"}})
+                             "error": {"code": -32601,
+                                       "message": f"Method not found: {method}. Supported: message/send, SendMessage",
+                                       "data": actionable_error(
+                                           f"Method not found: {method}.",
+                                           hint="Use JSON-RPC method message/send (or SendMessage) at POST /a2a, or POST /a2a/message:send.",
+                                           request=request)}})
     v03 = method == "message/send"
     message = (body.get("params") or {}).get("message") or {}
     completed = _complete_args(_extract_args(message))
@@ -1085,6 +1170,73 @@ async def a2a_jsonrpc(request: Request):
     return JSONResponse({"jsonrpc": "2.0", "id": rpc_id, "result": result_obj})
 
 
+async def a2a_dispatch(request: Request, *, prefer_jsonrpc: bool = False):
+    """Route a POST to JSON-RPC or HTTP+JSON A2A based on the body (and optional preference)."""
+    raw = await request.body()
+    try:
+        body = json.loads(raw) if raw else {}
+    except ValueError:
+        if prefer_jsonrpc:
+            return JSONResponse({"jsonrpc": "2.0", "id": None,
+                                 "error": {"code": -32700, "message": "Parse error",
+                                           "data": actionable_error("Parse error: body is not JSON.",
+                                                                    hint="POST JSON-RPC {\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"message/send\",\"params\":{\"message\":...}} to /a2a.",
+                                                                    request=request)}})
+        return await _a2a_http_from_parsed(request, raw, None)
+    if prefer_jsonrpc or (isinstance(body, dict) and (
+        body.get("jsonrpc") or body.get("method") in ({"message/send", "SendMessage"} | _A2A_TASK_METHODS)
+    )):
+        return await _a2a_jsonrpc_from_body(request, body)
+    return await _a2a_http_from_parsed(request, raw, body)
+
+
+@mcp.custom_route("/a2a/message:send", methods=["POST"])
+async def a2a_send_message(request: Request):
+    """A2A v1.0 HTTP+JSON SendMessage -> evaluate_trace. Returns a Message with a data part.
+
+    A plain-text or otherwise unknown first call gets HTTP 200 with a help message
+    and a ready-to-use example (never 400). A compact privacy-light trace in the
+    text is scored immediately.
+    """
+    return await a2a_dispatch(request, prefer_jsonrpc=False)
+
+
+@mcp.custom_route("/a2a", methods=["POST"])
+async def a2a_jsonrpc(request: Request):
+    """A2A JSON-RPC binding (v0.3 `message/send`, v1.0 `SendMessage`) -> evaluate_trace.
+    Messages without a trace get a help reply (not an error), so generic A2A clients get a usable answer."""
+    return await a2a_dispatch(request, prefer_jsonrpc=True)
+
+
+@mcp.custom_route("/v1/message:send", methods=["POST"])
+@mcp.custom_route("/.well-known/agent-card.json", methods=["POST"])
+@mcp.custom_route("/.well-known/agent.json", methods=["POST"])
+@mcp.custom_route("/.well-known/agent-card.json/{rest:path}", methods=["POST"])
+@mcp.custom_route("/.well-known/agent.json/{rest:path}", methods=["POST"])
+async def a2a_alias_post(request: Request):
+    """Agents that POST to the card URL, a suffix of it, or /v1/message:send are routed to A2A."""
+    return await a2a_dispatch(request)
+
+
+@mcp.custom_route("/a2a/tasks/{task_id:path}", methods=["GET", "POST", "DELETE"])
+async def a2a_task(request: Request):
+    return _task_not_found_response(request, request.path_params.get("task_id") or "unknown")
+
+
+
+@mcp.custom_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
+async def unknown_path(request: Request):
+    """Host principle: never a bare 404. Point agents at the real endpoints and a working example."""
+    path = request.url.path
+    return _help_json(
+        request,
+        f"Unknown path: {path}",
+        404,
+        hint="Use POST /mcp for MCP, POST /a2a/message:send or POST /a2a for A2A, or GET /.well-known/agent-card.json, /llms.txt, /health.",
+        path=path,
+    )
+
+
 # Stateless HTTP: clientInfo arrives only on the `initialize` POST (or, for 2026+ clients, in each request's
 # _meta). This middleware remembers it per (hashed IP, user-agent) so the later tools/call can be attributed.
 _RECENT_CLIENTS: dict = {}
@@ -1094,6 +1246,145 @@ def _remember_client(key: tuple, info: dict) -> None:
     if len(_RECENT_CLIENTS) > 2000:
         _RECENT_CLIENTS.clear()
     _RECENT_CLIENTS[key] = {"client_name": info.get("name"), "client_version": info.get("version")}
+
+
+
+def _mcp_reject_reason(status: int, raw: bytes, scope: dict) -> str:
+    text = raw.decode("utf-8", "replace") if raw else ""
+    low = text.lower()
+    headers = {k.decode("latin1").lower() if isinstance(k, (bytes, bytearray)) else str(k).lower():
+               v.decode("latin1") if isinstance(v, (bytes, bytearray)) else str(v)
+               for k, v in (scope.get("headers") or [])}
+    accept = headers.get("accept", "")
+    if status == 406 or "not acceptable" in low:
+        return "not_acceptable"
+    if status == 415 or "unsupported media type" in low:
+        return "unsupported_media_type"
+    if status == 405:
+        return "method_not_allowed"
+    if "missing session" in low:
+        return "missing_session"
+    if status == 404 or "session not found" in low:
+        return "session_not_found"
+    if "parse error" in low or (status == 400 and raw and not text.lstrip().startswith("{") and not text.lstrip().startswith("[")):
+        return "invalid_json"
+    if status == 400:
+        return "bad_request"
+    return f"http_{status}"
+
+
+def _scope_base(scope: dict) -> str:
+    public = os.environ.get("PUBLIC_URL")
+    if public:
+        return public.rstrip("/")
+    headers = {k.decode("latin1").lower(): v.decode("latin1") for k, v in (scope.get("headers") or [])}
+    proto = headers.get("x-forwarded-proto") or scope.get("scheme") or "https"
+    host = headers.get("x-forwarded-host") or headers.get("host") or "tracecheck-mcp.onrender.com"
+    return f"{proto}://{host}"
+
+
+def _enrich_mcp_reject_body(status: int, raw: bytes, scope: dict, reason: str) -> bytes:
+    help_body = actionable_error(
+        f"MCP request rejected ({status}, {reason}).",
+        hint="POST JSON-RPC to /mcp with Accept: application/json, text/event-stream. Start with initialize, then tools/call evaluate_trace.",
+        base=_scope_base(scope),
+        reason=reason,
+        status=status,
+    )
+    if not raw:
+        return json.dumps(help_body).encode()
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        help_body["error"] = f"MCP request rejected ({status}, {reason})."
+        return json.dumps(help_body).encode()
+    if isinstance(payload, dict) and isinstance(payload.get("error"), dict):
+        msg = payload["error"].get("message")
+        if msg:
+            help_body["error"] = f"MCP request rejected ({status}, {reason}): {msg}"
+        existing = payload["error"].get("data")
+        if existing not in (None, ""):
+            help_body["sdk_data"] = existing
+        payload["error"]["data"] = help_body
+        return json.dumps(payload).encode()
+    return json.dumps(help_body).encode()
+
+
+def _log_mcp_reject(scope: dict, status: int, reason: str) -> None:
+    headers = {k.decode("latin1").lower(): v.decode("latin1") for k, v in (scope.get("headers") or [])}
+    # Reconstruct a minimal request-like object for the hashed client fields only.
+    class _Hdr:
+        def __init__(self, h):
+            self.headers = h
+            self.client = None
+    client = _client_from_request(_Hdr(headers))
+    entry = {
+        "status": status,
+        "reason": reason,
+        "method": scope.get("method"),
+        "path": scope.get("path"),
+        "accept": (headers.get("accept") or "")[:120] or None,
+        "has_session": bool(headers.get("mcp-session-id")),
+        **{k: client.get(k) for k in ("ip_hash", "user_agent") if client.get(k)},
+    }
+    print("TRACECHECK_MCP_REJECT " + json.dumps(entry, ensure_ascii=False), file=_CALL_STREAM, flush=True)
+    logger.info("MCP request rejected: status=%s reason=%s", status, reason)
+
+
+def _set_header(headers: list, name: bytes, value: bytes) -> list:
+    out = [(k, v) for k, v in headers if k.lower() != name.lower()]
+    out.append((name, value))
+    return out
+
+
+class McpRejectLogger:
+    """Log a short reason code for /mcp 4xx (no request content) and attach actionable help to the body."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or not scope.get("path", "").startswith("/mcp"):
+            return await self.app(scope, receive, send)
+        status = None
+        headers = []
+        chunks = []
+        pending = False
+
+        async def wrapper(message):
+            nonlocal status, headers, pending
+            typ = message["type"]
+            if typ == "http.response.start":
+                status = message["status"]
+                headers = list(message.get("headers") or [])
+                if status and status >= 400:
+                    pending = True
+                    return
+                await send(message)
+                return
+            if typ == "http.response.body" and pending:
+                chunks.append(message.get("body", b""))
+                if message.get("more_body"):
+                    return
+                raw = b"".join(chunks)
+                reason = _mcp_reject_reason(status, raw, scope)
+                try:
+                    _log_mcp_reject(scope, status, reason)
+                except Exception:
+                    logger.warning("could not log MCP reject", exc_info=True)
+                try:
+                    new_body = _enrich_mcp_reject_body(status, raw, scope, reason)
+                except Exception:
+                    new_body = raw
+                headers = _set_header(headers, b"content-type", b"application/json")
+                headers = _set_header(headers, b"content-length", str(len(new_body)).encode())
+                await send({"type": "http.response.start", "status": status, "headers": headers})
+                await send({"type": "http.response.body", "body": new_body, "more_body": False})
+                pending = False
+                return
+            await send(message)
+
+        await self.app(scope, receive, wrapper)
 
 
 class ClientInfoSniffer:
@@ -1149,6 +1440,26 @@ def build_http_app():
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET", "HEAD", "POST", "DELETE", "OPTIONS"],
                        allow_headers=["*"], expose_headers=["mcp-session-id", "mcp-protocol-version"])
     app.add_middleware(ClientInfoSniffer)
+    app.add_middleware(McpRejectLogger)
+    from starlette.exceptions import HTTPException
+
+    async def _http_exception_handler(request, exc):
+        if request.url.path.startswith("/mcp"):
+            # /mcp 4xx are handled by McpRejectLogger; keep the SDK response if Starlette raises.
+            from starlette.responses import Response
+            return Response(status_code=exc.status_code, headers=getattr(exc, "headers", None) or {})
+        hint = "Use POST /mcp for MCP, POST /a2a/message:send or POST /a2a for A2A, or GET /.well-known/agent-card.json, /llms.txt, /health."
+        if exc.status_code == 405:
+            hint = "This path exists but the method is not allowed. " + hint
+        resp = _help_json(request, str(exc.detail) if getattr(exc, "detail", None) else f"HTTP {exc.status_code}",
+                          exc.status_code, hint=hint)
+        if exc.status_code == 405:
+            resp.headers["Allow"] = "GET, POST, HEAD, OPTIONS"
+        return resp
+
+    app.add_exception_handler(HTTPException, _http_exception_handler)
+    app.add_exception_handler(404, _http_exception_handler)
+    app.add_exception_handler(405, _http_exception_handler)
     return app, host
 
 
