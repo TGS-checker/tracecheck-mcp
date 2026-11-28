@@ -6,7 +6,7 @@ import re
 import server
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-LEAKS = [r"weight\s*0\.\d", r"\bweights?\b", r"capped at", r"~\s*60", r"real repeat", r"benefit of the doubt"]
+LEAKS = [r"weight\s*0\.\d", r"\bweights?\b", r"capped at", r"~\s*60", r"real repeat", r"benefit of the doubt", r"below\s+~?\s*\d+", r"dimension weights"]
 
 
 def _check(text: str, where: str):
@@ -24,7 +24,7 @@ def test_tool_descriptions_and_instructions():
 
 
 def test_public_files():
-    for name in ["README.md", "llms.txt", "agent-card.json", "server.json", "docs/self-check.md", "SPEC.md", "ARCHITECTURE.md", "SECURITY.md"]:
+    for name in ["README.md", "llms.txt", "agent-card.json", "server.json", "docs/self-check.md", "SPEC.md", "ARCHITECTURE.md", "SECURITY.md", "docs/integrations/claude.md", "docs/integrations/langchain.md", "docs/integrations/openai-agents.md", "docs/integrations/crewai.md", "pyproject.toml"]:
         _check((ROOT / name).read_text(), name)
 
 

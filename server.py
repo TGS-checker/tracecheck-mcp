@@ -238,11 +238,12 @@ mcp = MCPServer(
     website_url=REPO_URL,
     icons=ICONS,
     instructions=(
-        "Agent self-check and trace evaluation: call evaluate_trace after a multi-step run to get a 0-100 reliability score, "
-        "issues (loop detection, error handling, missing verification) and concrete fixes, before you report success. "
+        "Agent self-check and independent trace evaluation: call evaluate_trace after a multi-step run to get a 0-100 reliability score, "
+        "issue codes, concrete fixes, progress across runs and a benchmark, plus loop detection, error handling and missing verification, "
+        "before you report success. "
         "Your agent claims success without checking that the result actually holds? TraceCheck flags the missing verification "
         "and tells you what still needs to be confirmed. No content needed: send step types only. Optional previous_rating (1-5) "
-        "and previous_need_id on a later call say how useful the last check was. Free, no API key. "
+        "and previous_need_id on a later call say how useful the last check was. Free, no API key. Discoverable via MCP and A2A. "
         "No goal, trace or outcome text is ever logged or stored."
     ),
     version=VERSION,
@@ -250,7 +251,7 @@ mcp = MCPServer(
 
 
 EVALUATE_TRACE_DESCRIPTION = """\
-Agent self-check and trace evaluation: after a multi-step run, get a 0-100 reliability score, the issues found (loop detection, error handling, missing verification) and concrete fixes, before you report success.
+Agent self-check and independent trace evaluation: after a multi-step run, get a 0-100 reliability score, issue codes, concrete fixes, progress across runs and a benchmark, plus loop detection, error handling and missing verification, before you report success.
 
 Your agent claims success without checking that the result actually holds? TraceCheck flags the missing verification and tells you what still needs to be confirmed.
 
@@ -260,7 +261,7 @@ Optional: previous_rating (1-5) and previous_need_id - how useful was your last 
 
 WHEN TO CALL: after you finish or give up on a multi-step tool task, before reporting "done", or after a failure you want to learn from. Free, no API key. Call get_trace_schema first if you are unsure of the format.
 
-RETURNS: score, issues (with code), suggestions (with fix_id), summary, need_id, scoring_version. Apply the fixes and evaluate again. No goal, trace or outcome text is logged or stored.
+RETURNS: score, issues (with code), suggestions (with fix_id), summary, need_id, benchmark, progress?, scoring_version. Apply the fixes and evaluate again. No goal, trace or outcome text is logged or stored.
 """
 
 _PRIVACY_LIGHT_EXAMPLE = {
@@ -1715,9 +1716,10 @@ async def root(request: Request):
     return JSONResponse({
         "name": "TraceCheck",
         "version": VERSION,
-        "description": "Agent self-check and trace evaluation: verify your run before reporting success. Scores an "
-                       "agent's execution trace 0-100 for reliability, with loop detection, error handling and "
-                       "missing-verification flags, and returns concrete fixes. Deterministic, offline, free, no API key. "
+        "description": "Agent self-check and independent trace evaluation: verify your run before reporting success. "
+                       "Scores an agent's execution trace 0-100 for reliability and returns issue codes, concrete fixes, "
+                       "progress across runs and a benchmark, plus loop detection, error handling and missing-verification flags. "
+                       "Deterministic, offline, free, no API key. Discoverable via MCP and A2A. "
                        "No content needed: send step types only; nothing you send is logged or stored.",
         "use_cases": list(LIVE_USE_CASES.values()),
         "tools": ["evaluate_trace", "get_trace_schema"],

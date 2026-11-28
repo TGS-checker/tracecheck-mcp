@@ -50,7 +50,7 @@ Send no content, only step types:
   (types: action, observe, error, retry, fallback, verify, final)
 - outcome: "success", "partial" or "failed"
 - agent_name: "<your-agent-name>"
-If the score is below 70 or issues are listed, apply the suggestions (retry, verify,
+If issues are listed, apply the suggestions (retry, verify,
 or report "partial") before you answer the user.
 ```
 

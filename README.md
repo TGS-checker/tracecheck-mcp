@@ -11,7 +11,7 @@
 
 Also listed in: [TensorBlock MCP Index](https://www.tensorblock.co/mcp/servers/github-tgs-checker-tracecheck-mcp-68917ff5) · [awesome-a2a](https://github.com/ai-boost/awesome-a2a)
 
-**TraceCheck is an agent self-check and trace evaluation service: verify your run before you report success.** Did I succeed? Send your goal, steps and claimed outcome and get a 0-100 reliability score, the issues found (loop detection, error handling, missing verification) and concrete fixes. Your agent claims success without checking that the result actually holds? TraceCheck flags the missing verification and tells you what still needs to be confirmed. Free, hosted, no API key, deterministic (no LLM), v0.5.1.
+**TraceCheck is an agent self-check and independent trace evaluation service: verify your run before you report success.** Did I succeed? Send your goal, steps and claimed outcome and get a 0-100 reliability score, issue codes, concrete fixes, progress across runs and a benchmark. Your agent claims success without checking that the result actually holds? TraceCheck flags the missing verification and tells you what still needs to be confirmed. It also covers loop detection and error handling. Discoverable via MCP and A2A. Free, hosted, no API key, deterministic (no LLM), v0.5.1.
 
 **No content needed: send step types only.** TraceCheck scores the *structure* of a run (actions, errors, retries, verification, repetition), so you can send `"action:search ok > error > retry > verify passed"` with goal `"data lookup"` and outcome `"success"`. Nothing you send is logged or stored: no goal, trace or outcome text, only the score and counts (see [Privacy](#privacy-what-is-logged)).
 
@@ -141,7 +141,7 @@ Since v0.4 TraceCheck stores **no content**: no goal, trace or outcome text, and
 - New issue codes for order and open ends: `handoff_before_verification`, `unresolved_partial_observation`, `write_before_complete_data`, `partial_outcome_without_handover` (see SPEC.md).
 - New step type `handoff` (approval request, escalation). New goal types: scheduled batch work and media production.
 - Fixes about the result now start with the concrete check for your goal type, never with a generic step.
-- `error_recovery` is listed in `not_applicable` and does not count when a run had no errors or gaps.
+- When a run had no errors or gaps, `error_recovery` is returned as `not_applicable`.
 - `progress` lists `resolved`, `still_open` and `new` codes; `score_delta` is only compared between checks of the same goal type.
 - Always-on hosting: no cold start on the first call.
 
