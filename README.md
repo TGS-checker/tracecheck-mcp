@@ -148,6 +148,12 @@ Content fields are optional; prefer step types only.
 TraceCheck stores **nothing** and logs **codes and counts only**: no goal, trace or outcome text, no tool names, no raw IP. Each call writes one line (to `calls.jsonl` and, in HTTP mode, `TRACECHECK_CALL {json}` to stdout / Render logs). The exact line, every field and what it means are in [docs/data-policy.md](docs/data-policy.md).
 A step can only carry identifiers: in `tool`, `status` and `label` anything that is not an identifier is replaced by a short hash token before scoring. `agent_name` is logged only when it looks like an identifier. Scoring is deterministic and offline: your input is not sent anywhere else. Each result carries a `privacy` block that says the same in one line.
 
+## What's new in v0.5.5
+
+- For coordinators and briefs with a checklist: optional `expected_checks`, `out_of_scope` / `in_scope` and `open_blockers` (identifiers only). TraceCheck reports check coverage (n/m), names every missing, failed or unconfirmed check, and flags actions outside your scope and success claims while checks or blockers are still open. See [docs/first-call.md](docs/first-call.md#coordinator-with-a-checklist-055).
+- Only counts of these fields are logged, never the ids ([data policy](docs/data-policy.md)).
+- `scoring_version` 0.5.5: without the new fields, scores are identical to 0.5.3.
+
 ## What's new in v0.5.4
 
 - Easier to find and to trust: an MCP server card at `/mcp/server-card` and an AI catalog at `/.well-known/ai-catalog.json`.

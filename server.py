@@ -3,6 +3,9 @@ TraceCheck MCP Server
 A minimal agent-first service for independent evaluation of agent execution traces.
 Helps agents improve their own processes by providing objective feedback.
 
+v0.5.5: optional run context, all identifiers only: expected_checks (named check coverage n/m; missing, failed and
+unconfirmed checks named), out_of_scope / in_scope (scope_exceeded), open_blockers (success with open blockers).
+Without these fields, scores are identical to 0.5.4.
 v0.5.4: trust and discovery, scoring unchanged (SCORING_VERSION stays 0.5.3): MCP server card, AI catalog,
 content-free stage counters, strict step shape (identifiers only), privacy block in results, agent_name log hygiene.
 v0.5.3: outcome-aware verification fix text, what_to_verify names a lowered requirement, verify-before-handoff
@@ -68,8 +71,8 @@ except OSError:  # e.g. installed via uvx/pip on a machine without /workspace
     LOG_FILE = Path.home() / ".tracecheck" / "calls.jsonl"
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-VERSION = "0.5.4"
-SCORING_VERSION = "0.5.3"  # unchanged in 0.5.4 (scores stay comparable); POD retest-052: outcome-aware fixes, lowered-requirement check, need_id expiry note
+VERSION = "0.5.5"
+SCORING_VERSION = "0.5.5"  # 0.5.5: run context (expected checks, scope, blockers); without those fields scores equal 0.5.3/0.5.4
 # stdout carries JSON-RPC in stdio mode, so call lines go to stdout only in HTTP mode (set in main()).
 _CALL_STREAM = sys.stderr
 
@@ -273,11 +276,13 @@ Your agent claims success without checking that the result actually holds? Trace
 
 No content needed: send step types only (privacy-light). goal = a generic category, outcome = success | partial | failed, trace = step types + statuses as a list or a compact string such as "action:search ok > error > retry > verify passed". Types: action, observe, error, retry, fallback, verify, final, handoff. Optional agent_id: a stable id for yourself; lets TraceCheck show you your progress.
 
+Coordinators and briefs with a checklist: optionally send expected_checks (the check ids your brief asked for, recorded as "verify:<check> passed"), out_of_scope or in_scope (tool ids) and open_blockers (count or ids). TraceCheck reports check coverage, names each missing, failed or unconfirmed check, and flags out-of-scope actions and success claims with open checks or blockers. Identifiers only.
+
 Optional: previous_rating (1-5) and previous_need_id - how useful was your last check, now that you know whether the fix helped? 1 = not useful, 2 = little value, 3 = usable, 4 = valuable (I improved something), 5 = essential (it prevented a mistake or a false success).
 
 WHEN TO CALL: after you finish or give up on a multi-step tool task, before reporting "done", or after a failure you want to learn from. Free, no API key. Call get_trace_schema first if you are unsure of the format.
 
-RETURNS: score, issues (with code), suggestions (with fix_id), summary, need_id, benchmark, progress?, scoring_version. Apply the fixes and evaluate again. No goal, trace or outcome text is logged or stored.
+RETURNS: score, issues (with code), suggestions (with fix_id), summary, need_id, benchmark, progress?, checks?, scope?, blockers?, scoring_version. Apply the fixes and evaluate again. No goal, trace or outcome text is logged or stored.
 """
 
 _PRIVACY_LIGHT_EXAMPLE = {
@@ -290,6 +295,17 @@ _PRIVACY_LIGHT_EXAMPLE = {
     "agent_name": "my-agent",
 }
 _PRIVACY_LIGHT_COMPACT = "action:search ok > action:fetch_details error > retry:fetch_details ok > verify passed"
+# 0.5.5: a generic coordinator run with a checklist from its brief. Identifiers only.
+_COORDINATOR_EXAMPLE = {
+    "goal": "code change",
+    "trace": ("action:plan ok > action:delegate_build ok > action:delegate_qa ok > verify:tests passed > "
+              "verify:lint passed > verify:build passed > verify:docs passed > final"),
+    "outcome": "partial",
+    "expected_checks": ["tests", "lint", "build", "docs", "security_scan"],
+    "out_of_scope": ["deploy", "delete_branch"],
+    "open_blockers": ["security_scan"],
+    "agent_name": "my-coordinator",
+}
 
 TRACE_SCHEMA = {
     "tool": "evaluate_trace",
@@ -308,6 +324,16 @@ TRACE_SCHEMA = {
         "previous_rating": "int 1-5, optional. How useful was your last check? 1 = not useful, 2 = little value, "
                            "3 = usable, 4 = valuable (improved something), 5 = essential (prevented an error or a false success claim).",
         "previous_need_id": "string, optional. The need_id from your last response, sent with previous_rating.",
+        "expected_checks": "list of check ids, optional (e.g. ['tests','lint','visual']). The checks your brief or "
+                           "checklist asked for. Record each as a verify step with the same id: 'verify:tests passed' "
+                           "or {type:'verify', check:'tests', status:'passed'}. Returned: checks.coverage (n/m) and the "
+                           "missing, failed and unconfirmed check ids.",
+        "out_of_scope": "list of tool ids, optional. Tools you were told not to use; an action with one is reported as scope_exceeded.",
+        "in_scope": "list of tool ids, optional. The only tools you were allowed to use; any other action tool is reported as scope_exceeded.",
+        "open_blockers": "int or list of ids, optional. What is still blocked at hand-over. A success claim with open blockers is flagged.",
+        "id_rules": "expected_checks, out_of_scope, in_scope and open_blockers take identifiers only: lowercase letters, "
+                    "digits and _ . : / - (max 40 characters, max 30 per list). Other values are ignored with a line in "
+                    "notes; they are never echoed or logged.",
     },
     "example_call": _PRIVACY_LIGHT_EXAMPLE,  # default, shown first: privacy-light, no content
     "example_compact_trace": _PRIVACY_LIGHT_COMPACT,
@@ -321,6 +347,7 @@ TRACE_SCHEMA = {
         "example_call": _PRIVACY_LIGHT_EXAMPLE,
         "example_compact_trace": _PRIVACY_LIGHT_COMPACT,
     },
+    "example_coordinator_call": _COORDINATOR_EXAMPLE,
     "step_schema": {
         "note": "A step can only carry identifiers, never text. Anything else is ignored or replaced by a short hash token.",
         "type": "one of: action, observe, error, retry, fallback, verify, final, handoff",
@@ -330,6 +357,8 @@ TRACE_SCHEMA = {
         "label": "optional. Only compared for equality between steps, then reduced to a hash. Never returned or logged.",
         "stakes": "optional: low | normal | high",
         "verify_kind": "optional: api | script | visual | human | end_to_end | test",
+        "check": "optional, verify steps only: the check id from expected_checks (same rules as tool). Without it, "
+                 "the verify step's tool is used as the check id.",
         "other_fields": "ignored",
     },
     "content_fields": "Optional. Prefer step types only; free-text content is not required.",
@@ -340,6 +369,9 @@ TRACE_SCHEMA = {
         "suggestions": "list of {id (fix_id), text}",
         "summary": "one line",
         "need_id": "short id for this check; send it back as previous_need_id",
+        "checks": "only with expected_checks: {expected, passed, coverage 'n/m', missing, failed, unconfirmed, reported_open, not_expected}. A missing check you also list in open_blockers counts as reported_open (honest hand-over), not as missing",
+        "scope": "only with out_of_scope or in_scope: {exceeded: [tool ids]}",
+        "blockers": "only with open_blockers: {open, ids?}",
         "scoring_version": "version of the scoring rules",
     },
     "loop": "run task -> evaluate_trace -> apply suggestions -> re-run -> evaluate_trace again; compare score and dimensions.",
@@ -708,13 +740,16 @@ def rate_limited(key: str, now: float | None = None) -> int:
 
 
 def serve_evaluation(goal, trace, outcome, *, agent_name="unknown", agent_id=None, previous_rating=None,
-                     previous_need_id=None, client: dict | None = None) -> dict:
+                     previous_need_id=None, client: dict | None = None, expected_checks=None, out_of_scope=None,
+                     in_scope=None, open_blockers=None) -> dict:
     """One path for MCP and A2A: score, enrich with knowledge, log one content-free event."""
     client = client or {}
     too_big = check_limits(goal, trace, outcome)
     if too_big:
         return too_big
-    result = score_trace(goal, trace, outcome)
+    context, context_notes = parse_run_context(expected_checks, out_of_scope, in_scope, open_blockers)
+    result = score_trace(goal, trace, outcome, context or None)
+    context_notes = context_notes + result.pop("notes", []) if not result.get("error") else []
     if result.get("error"):
         return result
     optional, notes = _clean_optional(agent_id, previous_rating, previous_need_id)
@@ -727,6 +762,8 @@ def serve_evaluation(goal, trace, outcome, *, agent_name="unknown", agent_id=Non
                                 reason="rate_limited", retry_after_seconds=wait)
     prev_known = aid in _AGENT_LAST
     result = enrich_result(result, goal=goal, agent_id=aid, optional=optional, notes=notes)
+    if context_notes:
+        result["notes"] = context_notes + result.get("notes", [])
     record_call(trace, agent_name, result, client, extra={
         "agent_id": aid, "agent_id_source": aid_src, "goal_category": goal_category(goal),
         "previous_rating": optional.get("previous_rating"), "previous_need_id": optional.get("previous_need_id"),
@@ -771,6 +808,19 @@ def evaluate_trace(
         "or a false success claim)."))] = None,
     previous_need_id: Annotated[str | None, Field(description=(
         "Optional: the need_id from your last TraceCheck response, sent with previous_rating."))] = None,
+    expected_checks: Annotated[list[str] | str | None, Field(description=(
+        "Optional: ids of the checks your brief asked you to run, e.g. ['tests','lint','visual']. Record each one "
+        "as a verify step with the same id ('verify:tests passed'). TraceCheck reports coverage and names every "
+        "missing, failed or unconfirmed check. Identifiers only."))] = None,
+    out_of_scope: Annotated[list[str] | str | None, Field(description=(
+        "Optional: tool ids you were told not to use, e.g. ['deploy','delete_branch']. An action step with one of "
+        "these tools is reported as scope_exceeded. Identifiers only."))] = None,
+    in_scope: Annotated[list[str] | str | None, Field(description=(
+        "Optional: the only tool ids you were allowed to use. Any other action tool is reported as "
+        "scope_exceeded. Identifiers only."))] = None,
+    open_blockers: Annotated[int | list[str] | str | None, Field(description=(
+        "Optional: what is still blocked at hand-over, as a count (e.g. 2) or a list of ids "
+        "(e.g. ['missing_asset']). A success claim with open blockers is flagged."))] = None,
     ctx: Context | None = None,
 ) -> dict:
     """MCP tool wrapper: score the trace, then log the call with client info.
@@ -788,7 +838,8 @@ def evaluate_trace(
     goal, trace, outcome = filled
     result = serve_evaluation(goal, trace, outcome, agent_name=agent_name, agent_id=agent_id,
                               previous_rating=previous_rating, previous_need_id=previous_need_id,
-                              client=_client_from_ctx(ctx))
+                              client=_client_from_ctx(ctx), expected_checks=expected_checks,
+                              out_of_scope=out_of_scope, in_scope=in_scope, open_blockers=open_blockers)
     if result.get("error"):
         if ctx is not None:
             raise ToolError(json.dumps(result))
@@ -848,6 +899,13 @@ ISSUES = {
                                    "fix_wait_for_complete_data"),
     "partial_outcome_without_handover": ("The outcome is partial, but no hand-over or scheduling of the remaining work is visible.",
                                          "fix_hand_over_remaining_work"),
+    # 0.5.5: run context (optional; identifiers only)
+    "expected_check_missing": ("One or more checks you were asked to run have no verify step.", "fix_run_expected_checks"),
+    "expected_check_failed": ("One or more expected checks failed and never passed afterwards.", "fix_resolve_failed_checks"),
+    "expected_check_unconfirmed": ("One or more expected checks ran without a pass or fail status.", "fix_record_check_status"),
+    "success_with_open_checks": ("Success was claimed while expected checks are still open.", "fix_report_partial_open_checks"),
+    "scope_exceeded": ("An action was taken that is outside the scope you were given.", "fix_stay_in_scope"),
+    "success_with_open_blockers": ("Success was claimed while blockers are still open.", "fix_report_open_blockers"),
 }
 FIXES = {
     "fix_add_goal_category": "Send a generic goal category, such as 'data lookup', 'booking' or 'code change'.",
@@ -876,7 +934,17 @@ FIXES = {
                                     "or report partial and name the open point.",
     "fix_wait_for_complete_data": "Write results only after the data is complete; if you wrote early, re-check or rewrite them once the data is in.",
     "fix_hand_over_remaining_work": "Name the remaining work and hand it over or schedule it (a handoff step), so it is not lost.",
+    "fix_run_expected_checks": "Run these expected checks and record each one as a verify step, "
+                               "e.g. 'verify:<check> passed': {names}.",
+    "fix_resolve_failed_checks": "Fix what made these checks fail and run them again until they pass, "
+                                 "or report them as failed: {names}.",
+    "fix_record_check_status": "Record the result of these checks as passed or failed: {names}.",
+    "fix_report_partial_open_checks": "Report partial, not success, and name the checks that are still open: {names}.",
+    "fix_stay_in_scope": "Undo or report these out-of-scope actions, and ask before doing work outside the scope you were given: {names}.",
+    "fix_report_open_blockers": "Report partial, not success, and list the open blockers in your hand-over.",
 }
+CONTEXT_CODES = ("expected_check_missing", "expected_check_failed", "expected_check_unconfirmed",
+                 "success_with_open_checks", "scope_exceeded", "success_with_open_blockers")
 
 
 def _flag(issues: list, fixes: list, code: str, fix_id: str | None = None, **attrs) -> None:
@@ -905,6 +973,146 @@ def _ident(value, prefix: str, maxlen: int) -> str:
     if cut and len(text) <= maxlen and _IDENT_RE.match(cut):
         return cut
     return _hash_token(prefix, text)
+
+
+# --- 0.5.5 run context: identifiers only ----------------------------------------------
+CHECK_ID_MAX = 40
+CONTEXT_LIST_MAX = 30
+_CONTEXT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_.:/-]{0,39}$")
+CONTEXT_ID_SHAPE = ("short identifiers: lowercase letters, digits and _ . : / - (max 40 characters, "
+                    "max 30 per list), e.g. ['tests', 'lint', 'visual_check']")
+
+
+def _context_ids(value, field: str, notes: list) -> list | None:
+    """A list of identifiers (or a comma-separated string). Anything else is dropped with a note that teaches the
+    shape. Dropped values are never echoed or logged: they could be text."""
+    if value is None or value == "" or value == []:
+        return None
+    if isinstance(value, str):
+        value = [v for v in re.split(r"[,\s]+", value) if v]
+    if not isinstance(value, (list, tuple)):
+        notes.append(f"{field} was ignored: send a list of {CONTEXT_ID_SHAPE}.")
+        return None
+    ids, dropped = [], 0
+    for v in value:
+        t = str(v).strip().lower().replace(" ", "_") if isinstance(v, (str, int)) and not isinstance(v, bool) else ""
+        if t and _CONTEXT_ID_RE.match(t):
+            if t not in ids:
+                ids.append(t)
+        else:
+            dropped += 1
+    if len(ids) > CONTEXT_LIST_MAX:
+        dropped += len(ids) - CONTEXT_LIST_MAX
+        ids = ids[:CONTEXT_LIST_MAX]
+    if dropped:
+        notes.append(f"{field}: {dropped} value(s) ignored. Use {CONTEXT_ID_SHAPE}.")
+    return ids or None
+
+
+def parse_run_context(expected_checks=None, out_of_scope=None, in_scope=None, open_blockers=None) -> tuple[dict, list]:
+    """Optional run context from a coordinator brief: what to check, what not to touch, what is still blocked."""
+    notes: list = []
+    ctx: dict = {}
+    for field, value in (("expected_checks", expected_checks), ("out_of_scope", out_of_scope), ("in_scope", in_scope)):
+        ids = _context_ids(value, field, notes)
+        if ids:
+            ctx[field] = ids
+    if open_blockers is not None and open_blockers != "" and open_blockers != []:
+        if isinstance(open_blockers, bool):
+            notes.append("open_blockers was ignored: send a number (e.g. 2) or a list of identifiers.")
+        elif isinstance(open_blockers, int) or (isinstance(open_blockers, str) and open_blockers.strip().isdigit()):
+            n = int(open_blockers)
+            if 0 <= n <= 1000:
+                ctx["open_blockers"] = {"count": n}
+            else:
+                notes.append("open_blockers was ignored: a count must be 0-1000.")
+        else:
+            ids = _context_ids(open_blockers, "open_blockers", notes)
+            if ids:
+                ctx["open_blockers"] = {"count": len(ids), "ids": ids}
+    return ctx, notes
+
+
+def _check_ids_in(steps: list) -> dict:
+    """check id -> 'passed' | 'failed' | 'unconfirmed' (last decisive status wins: a later pass resolves a fail)."""
+    state: dict = {}
+    for st in steps:
+        if st["type"] != "verify":
+            continue
+        cid = st.get("check") or st.get("tool")
+        if not cid:
+            continue
+        status = st.get("status")
+        if status in _PASS_STATUSES:
+            state[cid] = "passed"
+        elif status in _ERROR_STATUSES or status in _FAILED_VERIFY_STATUSES:
+            state[cid] = "failed"
+        else:
+            state.setdefault(cid, "unconfirmed")
+    return state
+
+
+def score_context(steps: list, ctx: dict, claims_success: bool, issues: list, suggestions: list, caps: list,
+                  names: dict, table: dict) -> tuple[int, dict]:
+    """Apply the optional run context. Returns (goal-alignment penalty, public summary block)."""
+    penalty, block = 0, {}
+    expected = ctx.get("expected_checks")
+    if expected:
+        seen = _check_ids_in(steps)
+        missing = [c for c in expected if c not in seen]
+        failed = [c for c in expected if seen.get(c) == "failed"]
+        unconfirmed = [c for c in expected if seen.get(c) == "unconfirmed"]
+        passed = [c for c in expected if seen.get(c) == "passed"]
+        # A missing check that the caller itself reports as an open blocker is honest hand-over, not an omission.
+        named_open = set((ctx.get("open_blockers") or {}).get("ids") or [])
+        reported_open = [c for c in missing if c in named_open]
+        missing = [c for c in missing if c not in named_open]
+        block["checks"] = {"expected": len(expected), "passed": len(passed),
+                           "coverage": f"{len(passed)}/{len(expected)}", "missing": missing, "failed": failed,
+                           "unconfirmed": unconfirmed, "reported_open": reported_open,
+                           "not_expected": [c for c in seen if c not in expected][:CONTEXT_LIST_MAX]}
+        part = 0
+        for code, ids, key, fix in (("expected_check_missing", missing, "align_check_missing_penalty", "fix_run_expected_checks"),
+                                    ("expected_check_failed", failed, "align_check_failed_penalty", "fix_resolve_failed_checks"),
+                                    ("expected_check_unconfirmed", unconfirmed, "align_check_unconfirmed_penalty",
+                                     "fix_record_check_status")):
+            if ids:
+                _flag(issues, suggestions, code, checks=ids)
+                names[fix] = ids
+                part += table[key] * len(ids)
+        penalty += min(part, table["align_check_penalty_max"])
+        open_checks = missing + failed + unconfirmed + reported_open
+        if claims_success and open_checks:
+            _flag(issues, suggestions, "success_with_open_checks", checks=open_checks)
+            names["fix_report_partial_open_checks"] = open_checks
+            penalty += table["align_open_checks_success_penalty"]
+            caps.append((_CAPS["open_checks_success"], "success claimed with open expected checks"))
+    out_scope, in_scope = ctx.get("out_of_scope"), ctx.get("in_scope")
+    if out_scope or in_scope:
+        tools = []
+        for st in steps:
+            if st["type"] in ("action", "retry", "fallback") and st.get("tool"):
+                t = st["tool"]
+                outside = (out_scope and t in out_scope) or (in_scope and t not in in_scope)
+                if outside and t not in tools:
+                    tools.append(t)
+        block["scope"] = {"exceeded": tools}
+        if tools:
+            _flag(issues, suggestions, "scope_exceeded", tools=tools)
+            names["fix_stay_in_scope"] = tools
+            penalty += table["align_scope_penalty"]
+            caps.append((_CAPS["scope_exceeded"], "action outside the given scope"))
+    blockers = ctx.get("open_blockers")
+    if blockers is not None:
+        block["blockers"] = {"open": blockers["count"], **({"ids": blockers["ids"]} if blockers.get("ids") else {})}
+        if claims_success and blockers["count"] > 0:
+            _flag(issues, suggestions, "success_with_open_blockers", blockers=blockers["count"])
+            penalty += table["align_blockers_success_penalty"]
+            caps.append((_CAPS["open_blockers_success"], "success claimed with open blockers"))
+    # Context codes describe what the caller explicitly asked for: show them first.
+    issues.sort(key=lambda i: 0 if i["code"] in CONTEXT_CODES else 1)
+    suggestions.sort(key=lambda f: 0 if f in {ISSUES[c][1] for c in CONTEXT_CODES} else 1)
+    return penalty, block
 
 
 def _parse_steps(trace) -> list | None:
@@ -955,6 +1163,8 @@ def _parse_steps(trace) -> list | None:
             step["verify_kind"] = vk
         if st.get("requirement_lowered") is True or str(st.get("requirement_lowered")).lower() == "true":
             step["requirement_lowered"] = True
+        if st.get("check") is not None and typ == "verify":
+            step["check"] = _ident(st.get("check"), "c_", CHECK_ID_MAX)
         out.append(step)
     return out
 
@@ -1114,7 +1324,7 @@ def _order_and_open_ends(steps: list, outcome_kind: str) -> list:
     return found
 
 
-def score_steps(goal: str, steps: list, outcome: str) -> dict:
+def score_steps(goal: str, steps: list, outcome: str, context: dict | None = None) -> dict:
     """Score a privacy-light trace (step types + statuses only). Same dimensions/weights/caps as score_trace."""
     issues, suggestions, dimensions, caps = [], [], {}, []
     goal_l, outcome_l = (goal or "").lower().strip(), (outcome or "").lower().strip()
@@ -1264,10 +1474,19 @@ def score_steps(goal: str, steps: list, outcome: str) -> dict:
     else:
         align -= _ST["align_no_verify_penalty"]
         _flag(issues, suggestions, "missing_verification", what_to_verify=what)
+    names: dict = {}
+    block: dict = {}
+    if context and context.get("open_blockers", {}).get("count") and "partial_outcome_without_handover" in order_codes:
+        order_codes = [c for c in order_codes if c != "partial_outcome_without_handover"]  # named blockers = hand-over
     align -= _apply_order_codes(order_codes, issues, suggestions, caps, what, _ST)
+    if context:
+        ctx_penalty, block = score_context(steps, context, claims_success, issues, suggestions, caps, names, _ST)
+        align -= ctx_penalty
     dimensions["goal_alignment"] = max(0, min(100, align))
-    return _finish(dimensions, issues, suggestions, caps, privacy_mode=True, category=category,
-                   not_applicable=not_applicable, outcome_kind=_outcome_kind(outcome_l, claims_success))
+    result = _finish(dimensions, issues, suggestions, caps, privacy_mode=True, category=category,
+                     not_applicable=not_applicable, outcome_kind=_outcome_kind(outcome_l, claims_success), names=names)
+    result.update(block)
+    return result
 
 
 _ORDER_PENALTY_KEYS = {"handoff_before_verification": "align_handoff_penalty",
@@ -1289,7 +1508,7 @@ def _apply_order_codes(codes: list, issues: list, suggestions: list, caps: list,
     return penalty
 
 
-def score_trace(goal: str, trace, outcome: str) -> dict:
+def score_trace(goal: str, trace, outcome: str, context: dict | None = None) -> dict:
     """Dispatch: privacy-light step format -> score_steps, free text -> heuristic text scoring."""
     if not isinstance(goal, str) or not isinstance(outcome, str) or not isinstance(trace, (str, list)):
         return actionable_error(
@@ -1300,10 +1519,14 @@ def score_trace(goal: str, trace, outcome: str) -> dict:
         )
     steps = _parse_steps(trace)
     if steps is not None:
-        return score_steps(goal, steps, outcome)
+        return score_steps(goal, steps, outcome, context)
     if isinstance(trace, list):
         trace = "\n".join(str(x) for x in trace)
-    return score_text_trace(goal, trace, outcome)
+    result = score_text_trace(goal, trace, outcome)
+    if context:
+        result["notes"] = ["expected_checks, out_of_scope, in_scope and open_blockers need the step format "
+                                 "(e.g. 'action:build ok > verify:tests passed'); they were not applied to a free-text trace."]
+    return result
 
 
 def score_text_trace(goal: str, trace: str, outcome: str) -> dict:
@@ -1455,7 +1678,7 @@ def _what_to_verify(category: str, issues: list) -> str:
     return what
 
 
-def _fix_text(fix_id: str, outcome_kind: str) -> str:
+def _fix_text(fix_id: str, outcome_kind: str, names: dict | None = None) -> str:
     """Fix wording that depends on the claimed outcome (success / partial / failed)."""
     if fix_id == "fix_add_verification" and outcome_kind == "partial":
         return ("Record that check as a verify step, for example {'type':'verify','status':'passed'}, "
@@ -1463,7 +1686,10 @@ def _fix_text(fix_id: str, outcome_kind: str) -> str:
     if fix_id == "fix_add_verification" and outcome_kind == "failed":
         return ("Record that check as a verify step, for example {'type':'verify','status':'passed'}, "
                 "so the claimed failure is confirmed.")
-    return FIXES[fix_id]
+    text = FIXES[fix_id]
+    if "{names}" in text:
+        text = text.replace("{names}", ", ".join((names or {}).get(fix_id) or ["see issues"]))
+    return text
 
 
 NOT_APPLICABLE_REASONS = {
@@ -1472,7 +1698,8 @@ NOT_APPLICABLE_REASONS = {
 
 
 def _finish(dimensions: dict, issues: list, suggestions: list, caps: list, privacy_mode: bool,
-            category: str = "other", not_applicable: list | None = None, outcome_kind: str = "other") -> dict:
+            category: str = "other", not_applicable: list | None = None, outcome_kind: str = "other",
+            names: dict | None = None) -> dict:
     # 6. Overall score (weighted over the applicable dimensions), then critical-flaw caps
     not_applicable = not_applicable or []
     weights = {k: v for k, v in _W.items() if k not in not_applicable}
@@ -1485,7 +1712,7 @@ def _finish(dimensions: dict, issues: list, suggestions: list, caps: list, priva
                    **{k: v for k, v in i.items() if k != "code"}} for i in issues[:5]]
     what = _what_to_verify(category, issues)
     # Result fixes start with what to check for this goal type, then the general (outcome-aware) fix.
-    suggestions_out = [{"id": f, "text": (f"{what} {_fix_text(f, outcome_kind)}" if f in GOAL_FIXES else _fix_text(f, outcome_kind)),
+    suggestions_out = [{"id": f, "text": (f"{what} {_fix_text(f, outcome_kind, names)}" if f in GOAL_FIXES else _fix_text(f, outcome_kind, names)),
                         **({"what_to_verify": what} if f in GOAL_FIXES else {})}
                        for f in suggestions[:5]]
     na_reasons = {k: NOT_APPLICABLE_REASONS[k] for k in not_applicable if k in NOT_APPLICABLE_REASONS}
@@ -1557,6 +1784,18 @@ def _step_shape(trace) -> dict:
             "step_pattern": ">".join(t[:2] for t in types[:20])}
 
 
+def _context_counts(result: dict) -> dict | None:
+    """0.5.5 run context in the log: counts only, never the check, scope or blocker ids."""
+    checks, scope, blockers = result.get("checks"), result.get("scope"), result.get("blockers")
+    if not (checks or scope or blockers):
+        return None
+    return {"expected_checks_n": checks["expected"] if checks else None,
+            "passed_checks_n": checks["passed"] if checks else None,
+            "scope_given": scope is not None,
+            "scope_exceeded_n": len(scope["exceeded"]) if scope else None,
+            "open_blockers_n": blockers["open"] if blockers else None}
+
+
 def record_call(trace, agent_name: str, result: dict, client: dict | None = None, extra: dict | None = None) -> None:
     """Log one call event in the shared data-plan schema: JSONL file + one `TRACECHECK_CALL {json}` line.
     Content-free by design: no goal, trace or outcome text, no tool names, no raw IP."""
@@ -1595,6 +1834,7 @@ def record_call(trace, agent_name: str, result: dict, client: dict | None = None
         "returning": extra.get("returning_in_memory"),
         "trace_length": len(trace),  # characters for free text, number of steps for a list
         "privacy_mode": bool(result.get("privacy_mode")),
+        "context": _context_counts(result),
         **{k: client.get(k) for k in _LOG_CLIENT_FIELDS if client.get(k) is not None},
     }
     entry["timestamp"] = entry["ts_utc"]
@@ -2071,6 +2311,16 @@ def _extract_args(message: dict) -> dict:
     return {}
 
 
+def _context_args(args: dict) -> dict:
+    """0.5.5 optional run-context fields from an A2A data part (snake_case or camelCase)."""
+    out = {}
+    for key, alt in (("expected_checks", "expectedChecks"), ("out_of_scope", "outOfScope"), ("in_scope", "inScope"),
+                     ("open_blockers", "openBlockers")):
+        if args.get(key) is not None or args.get(alt) is not None:
+            out[key] = args.get(key) if args.get(key) is not None else args.get(alt)
+    return out
+
+
 def _complete_args(args: dict | None) -> dict | None:
     args = args if isinstance(args, dict) else {}
     filled = _lenient_args(args.get("goal", ""), args.get("trace", ""), args.get("outcome", ""))
@@ -2150,6 +2400,7 @@ async def _a2a_http_from_parsed(request: Request, raw: bytes, body):
                                   agent_id=completed.get("agent_id") or completed.get("session_id"),
                                   previous_rating=completed.get("previous_rating"),
                                   previous_need_id=completed.get("previous_need_id"),
+                                  **_context_args(completed),
                                   client={**_client_from_request(request), "transport": "a2a"})
         parts = [
             {"data": result, "mediaType": "application/json"},
@@ -2190,6 +2441,7 @@ async def _a2a_jsonrpc_from_body(request: Request, body):
                                   agent_id=completed.get("agent_id") or completed.get("session_id"),
                                   previous_rating=completed.get("previous_rating"),
                                   previous_need_id=completed.get("previous_need_id"),
+                                  **_context_args(completed),
                                   client={**_client_from_request(request), "transport": "a2a-jsonrpc"})
         parts = [{"kind": "data", "data": result}, {"kind": "text", "text": result.get("summary") or result.get("error", "")}]
     else:

@@ -8,6 +8,7 @@
 - Before reporting "done": verify my run, evaluate my trace.
 - After a failure or a messy retry: error handling and loop detection.
 - Your agent claims success without checking that the result actually holds? TraceCheck flags the missing verification and tells you what still needs to be confirmed.
+- You coordinate subagents and your brief has a checklist or scope: send expected_checks (check ids), out_of_scope or in_scope (tool ids) and open_blockers. TraceCheck names each missing, failed or unconfirmed check, reports coverage (n/m), and flags out-of-scope actions and success claims while checks or blockers are still open.
 - In an improve loop: run task -> evaluate_trace -> apply suggestions -> re-run -> compare scores. On the next call you may send previous_rating (1-5) and previous_need_id to say how useful the last check was.
 
 
@@ -57,6 +58,17 @@ Step types: action, observe, error, retry, fallback, verify, final, handoff. Sta
 Optional per-step label or target_hash helps TraceCheck tell related steps apart. Status "partial" is for a paged or incomplete result you will continue. Prefer step types only; no goal, trace or outcome text is logged or stored.
 goal = a generic category, outcome = success | partial | failed.
 
+Coordinator with a checklist (optional fields, identifiers only; record each check as "verify:<check> passed"):
+
+```json
+{"goal": "code change",
+ "trace": "action:plan ok > action:delegate_build ok > action:delegate_qa ok > verify:tests passed > verify:lint passed > verify:build passed > verify:docs passed > final",
+ "outcome": "partial",
+ "expected_checks": ["tests", "lint", "build", "docs", "security_scan"],
+ "out_of_scope": ["deploy"],
+ "open_blockers": ["security_scan"]}
+```
+
 A2A example:
 
 ```bash
@@ -64,7 +76,7 @@ curl -s -X POST https://tracecheck-mcp.onrender.com/a2a/message:send -H 'Content
   -d '{"message":{"role":"ROLE_USER","messageId":"1","parts":[{"data":{"goal":"data lookup","trace":"action:search ok > verify passed","outcome":"success"}}]}}'
 ```
 
-Returns JSON: score (0-100), dimensions (goal_clarity, observability, error_recovery, goal_alignment, efficiency), issues, suggestions, summary, privacy_mode, version, scoring_version.
+Returns JSON: score (0-100), dimensions (goal_clarity, observability, error_recovery, goal_alignment, efficiency), issues, suggestions, summary, privacy_mode, version, scoring_version; with a checklist or scope also checks (coverage n/m, missing, failed, unconfirmed), scope and blockers.
 
 Content fields are optional; prefer the privacy-light example above (step types only).
 

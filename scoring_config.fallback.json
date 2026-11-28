@@ -16,7 +16,10 @@
   "incomplete_data": 60,
   "ungrounded_high_stakes": 30,
   "handoff_before_verification": 80,
-  "open_observation": 70
+  "open_observation": 70,
+  "open_checks_success": 55,
+  "scope_exceeded": 65,
+  "open_blockers_success": 55
  },
  "efficiency": {
   "full": 100,
@@ -71,7 +74,14 @@
   "align_open_observation_penalty": 20,
   "align_write_early_penalty": 10,
   "align_partial_no_handover_penalty": 10,
-  "obs_verify_kind_bonus": 5
+  "obs_verify_kind_bonus": 5,
+  "align_check_missing_penalty": 8,
+  "align_check_failed_penalty": 10,
+  "align_check_unconfirmed_penalty": 5,
+  "align_check_penalty_max": 25,
+  "align_open_checks_success_penalty": 20,
+  "align_scope_penalty": 15,
+  "align_blockers_success_penalty": 20
  },
  "text": {
   "near_dup_similarity": 1.0,

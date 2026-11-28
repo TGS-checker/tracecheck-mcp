@@ -15,8 +15,14 @@ The hosted service uses a private, calibrated scoring configuration; scores are 
 | `agent_name` | string | no | Display name. |
 | `previous_rating` | integer 1-5 | no | How useful was your last check, now that you know whether the fix helped? |
 | `previous_need_id` | string `nd_` + 10 hex | no | The `need_id` of the check you are rating. |
+| `expected_checks` | list of ids (max 30) | no | Since 0.5.5. The checks your brief asked for. Record each as a verify step with the same id (`verify:tests passed`, or `check` on a verify step). |
+| `out_of_scope` | list of tool ids (max 30) | no | Since 0.5.5. Tools you were told not to use. |
+| `in_scope` | list of tool ids (max 30) | no | Since 0.5.5. The only tools you were allowed to use. |
+| `open_blockers` | integer 0-1000 or list of ids (max 30) | no | Since 0.5.5. What is still blocked at hand-over. |
 
-Step object: `{type, tool?, status?, label?, target_hash?, stakes?, verify_kind?, requirement_lowered?}`
+Ids in these four fields: lowercase `[a-z0-9_.:/-]`, starting with a letter or digit, max 40 characters. A comma-separated string is accepted. Other values are ignored with a line in `notes[]`; they are never echoed or logged. Only counts are logged (`context` in the data policy).
+
+Step object: `{type, tool?, status?, label?, target_hash?, stakes?, verify_kind?, requirement_lowered?, check?}` (`check`: verify steps only, since 0.5.5; without it the verify step's `tool` is the check id)
 
 - `type`: `action`, `observe`, `error`, `retry`, `fallback`, `verify`, `final`, `handoff` (since 0.5.1: work or a decision handed to a person or another agent, such as an approval request or escalation).
 - `status`: `ok`, `partial`, `empty`, `error`/`failed`/`timeout`, `passed`.
@@ -50,6 +56,9 @@ A free-text trace is also accepted, but not recommended. Input may be in any lan
 | `rating_request` | One line asking for an optional `previous_rating` on your next call. |
 | `notes[]` | Optional fields that were ignored, with what to send instead. |
 | `summary`, `privacy_mode`, `version`, `scoring_version` | As named. |
+| `checks` | Only with `expected_checks` (0.5.5): `{expected, passed, coverage "n/m", missing[], failed[], unconfirmed[], reported_open[], not_expected[]}`. A failed check that passed later counts as passed. A missing check that you also list in `open_blockers` is `reported_open`. |
+| `scope` | Only with `out_of_scope` or `in_scope` (0.5.5): `{exceeded[]}` (tool ids of action, retry or fallback steps outside your scope). |
+| `blockers` | Only with `open_blockers` (0.5.5): `{open, ids?}`. |
 | `privacy` | `{stored, logged, policy}`: what the service keeps (nothing stored; codes and counts logged) and a link to the data policy. Since 0.5.4. |
 
 `confidence`: `low`, `medium` or `high`, based on `n`.
@@ -78,6 +87,12 @@ A free-text trace is also accepted, but not recommended. Input may be in any lan
 | `unresolved_partial_observation` | Success was claimed while an observation with partial or empty data was never resolved. | `fix_resolve_open_observation` |
 | `write_before_complete_data` | Results were written while the data they depend on was still incomplete. | `fix_wait_for_complete_data` |
 | `partial_outcome_without_handover` | The outcome is partial, but no hand-over or scheduling of the remaining work is visible. | `fix_hand_over_remaining_work` |
+| `expected_check_missing` | One or more checks you were asked to run have no verify step (issue carries `checks[]`). | `fix_run_expected_checks` |
+| `expected_check_failed` | One or more expected checks failed and never passed afterwards (`checks[]`). | `fix_resolve_failed_checks` |
+| `expected_check_unconfirmed` | One or more expected checks ran without a pass or fail status (`checks[]`). | `fix_record_check_status` |
+| `success_with_open_checks` | Success was claimed while expected checks are still open (`checks[]`). | `fix_report_partial_open_checks` |
+| `scope_exceeded` | An action was taken that is outside the scope you were given (`tools[]`). | `fix_stay_in_scope` |
+| `success_with_open_blockers` | Success was claimed while blockers are still open (`blockers`). | `fix_report_open_blockers` |
 
 | fix_id | text |
 |---|---|
@@ -102,6 +117,12 @@ A free-text trace is also accepted, but not recommended. Input may be in any lan
 | `fix_resolve_open_observation` | <check for your goal type> Resolve the partial or empty data point first (re-check it or get the missing value), or report partial and name the open point. |
 | `fix_wait_for_complete_data` | <check for your goal type> Write results only after the data is complete; if you wrote early, re-check or rewrite them once the data is in. |
 | `fix_hand_over_remaining_work` | <check for your goal type> Name the remaining work and hand it over or schedule it (a handoff step), so it is not lost. |
+| `fix_run_expected_checks` | Run these expected checks and record each one as a verify step, e.g. 'verify:<check> passed': <check ids>. |
+| `fix_resolve_failed_checks` | Fix what made these checks fail and run them again until they pass, or report them as failed: <check ids>. |
+| `fix_record_check_status` | Record the result of these checks as passed or failed: <check ids>. |
+| `fix_report_partial_open_checks` | Report partial, not success, and name the checks that are still open: <check ids>. |
+| `fix_stay_in_scope` | Undo or report these out-of-scope actions, and ask before doing work outside the scope you were given: <tool ids>. |
+| `fix_report_open_blockers` | Report partial, not success, and list the open blockers in your hand-over. |
 
 `<check for your goal type>` is the `what_to_verify` sentence for the goal category of the call, for example "Confirm the payment or order status with the provider." for a purchase.
 
@@ -126,7 +147,8 @@ Limits: 200 steps, 20000 trace characters, 500 characters for goal and outcome, 
 |---|---|---|
 | all codes in section 3 except the three below | 0.5.0 (first emitted as codes) | active |
 | `conclusion_on_incomplete_data`, `requirement_lowered`, `verify_kind_mismatch` | 0.5.0 | active |
-| `handoff_before_verification`, `unresolved_partial_observation`, `write_before_complete_data`, `partial_outcome_without_handover` (fixes `fix_verify_before_handoff`, `fix_resolve_open_observation`, `fix_wait_for_complete_data`, `fix_hand_over_remaining_work`) | 0.5.1 | active (new) |
+| `handoff_before_verification`, `unresolved_partial_observation`, `write_before_complete_data`, `partial_outcome_without_handover` (fixes `fix_verify_before_handoff`, `fix_resolve_open_observation`, `fix_wait_for_complete_data`, `fix_hand_over_remaining_work`) | 0.5.1 | active |
+| `expected_check_missing`, `expected_check_failed`, `expected_check_unconfirmed`, `success_with_open_checks`, `scope_exceeded`, `success_with_open_blockers` (only with the optional 0.5.5 fields) | 0.5.5 | active (new) |
 
 ## 6. Privacy
 

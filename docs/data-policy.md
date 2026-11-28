@@ -16,7 +16,7 @@ This page says exactly what the hosted service (`https://tracecheck-mcp.onrender
 One `TRACECHECK_CALL` line per evaluation (the same fields are written to a local `calls.jsonl` on the instance):
 
 ```
-TRACECHECK_CALL {"event_id": "4313d8263a8e4e98", "event_type": "call", "ts_utc": "2026-11-28T08:28:47.713878Z", "timestamp": "2026-11-28T08:28:47.713878Z", "schema_version": 1, "server_version": "0.5.4", "version": "0.5.4", "scoring_version": "0.5.3", "agent_id": "ag_x", "agent_id_source": null, "agent_kind": "agent", "agent_name": "other", "client_family": "x", "goal_category": null, "arg_shape": "privacy_light", "step_count": 2, "error_count": 0, "retry_count": 0, "has_verify": true, "step_pattern": "ac>ve", "score": 67, "dimensions": {"goal_clarity": 85, "observability": 25, "efficiency": 60, "error_recovery": null, "goal_alignment": 100}, "issue_count": 1, "issue_codes": ["too_few_steps"], "fix_ids": ["fix_add_steps"], "need_id": null, "knowledge_match": false, "benchmark_given": false, "prev_score_same_agent_need": null, "score_delta": null, "issues_resolved": null, "explicit_feedback": null, "previous_need_id": null, "returning": null, "trace_length": 32, "privacy_mode": true, "client_name": "x", "client_version": "1", "transport": "http", "user_agent": "pytest/1", "ip_hash": "abc"}
+TRACECHECK_CALL {"event_id": "2fd1de1642144bbc", "event_type": "call", "ts_utc": "2026-11-28T09:35:59.066981Z", "timestamp": "2026-11-28T09:35:59.066981Z", "schema_version": 1, "server_version": "0.5.5", "version": "0.5.5", "scoring_version": "0.5.5", "agent_id": "ag_x", "agent_id_source": null, "agent_kind": "agent", "agent_name": "other", "client_family": "x", "goal_category": null, "arg_shape": "privacy_light", "step_count": 2, "error_count": 0, "retry_count": 0, "has_verify": true, "step_pattern": "ac>ve", "score": 67, "dimensions": {"goal_clarity": 85, "observability": 25, "efficiency": 60, "error_recovery": null, "goal_alignment": 100}, "issue_count": 1, "issue_codes": ["too_few_steps"], "fix_ids": ["fix_add_steps"], "need_id": null, "knowledge_match": false, "benchmark_given": false, "prev_score_same_agent_need": null, "score_delta": null, "issues_resolved": null, "explicit_feedback": null, "previous_need_id": null, "returning": null, "trace_length": 32, "privacy_mode": true, "context": null, "client_name": "x", "client_version": "1", "transport": "http", "user_agent": "pytest/1", "ip_hash": "abc"}
 ```
 
 | Field | Meaning |
@@ -34,6 +34,7 @@ TRACECHECK_CALL {"event_id": "4313d8263a8e4e98", "event_type": "call", "ts_utc":
 | `score`, `dimensions`, `issue_count`, `issue_codes`, `fix_ids` | The result: numbers and public codes. |
 | `need_id`, `previous_need_id`, `explicit_feedback`, `prev_score_same_agent_need`, `score_delta`, `issues_resolved`, `returning` | Progress across your runs, only when you send `agent_id` or `previous_need_id`. |
 | `knowledge_match`, `benchmark_given` | Whether benchmark data was available for your check. |
+| `context` | Only when you send `expected_checks`, `out_of_scope`, `in_scope` or `open_blockers`: counts only (`expected_checks_n`, `passed_checks_n`, `scope_given`, `scope_exceeded_n`, `open_blockers_n`). The check, tool and blocker ids themselves are never logged. Otherwise `null`. |
 
 ## Counters
 

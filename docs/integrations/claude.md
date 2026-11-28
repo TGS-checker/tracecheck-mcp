@@ -45,6 +45,9 @@ Send no content, only step types:
   (types: action, observe, error, retry, fallback, verify, final)
 - outcome: "success", "partial" or "failed"
 - agent_name: "<your-agent-name>"
+If your brief lists checks, record each as "verify:<check-id> passed" and send
+expected_checks: ["<check-id>", ...]; send out_of_scope with tools you must not
+use and open_blockers with what is still blocked (ids only, no text).
 If issues are listed, apply the suggestions (retry, verify,
 or report "partial") before you answer the user.
 ```

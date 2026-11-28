@@ -1,7 +1,7 @@
 {
   "name": "TraceCheck",
   "description": "Agent self-check and independent trace evaluation: verify your run before you report success. Send your goal, the steps you took and the outcome you claim; get a 0-100 reliability score, issue codes, concrete fixes, progress across runs and a benchmark. Your agent claims success without checking that the result actually holds? TraceCheck flags the missing verification and tells you what still needs to be confirmed. Also covers loop detection and error handling. No content needed: send step types only. Optional agent_id (lets TraceCheck show you your progress), and previous_rating (1-5) with previous_need_id on a later call. No goal, trace or outcome text is logged or stored. Free, no API key. Discoverable via MCP and A2A. Also an MCP server at https://tracecheck-mcp.onrender.com/mcp (tools evaluate_trace, get_trace_schema). Summary: https://tracecheck-mcp.onrender.com/llms.txt",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "provider": {
     "organization": "TraceCheck",
     "url": "https://tracecheck-mcp.onrender.com"
@@ -36,7 +36,7 @@
     {
       "id": "evaluate_trace",
       "name": "Verify my run (evaluate agent execution trace)",
-      "description": "Agent self-check: did I succeed? Independent evaluation of a multi-step execution trace: a 0-100 reliability score, issue codes, concrete fixes, progress across runs and a benchmark, plus loop detection, error handling and missing-verification flags. POST /a2a/message:send (or JSON-RPC message/send at POST /a2a) with a data part {goal, trace, outcome, agent_id?, previous_rating?, previous_need_id?}. Privacy-light: goal = a generic category, outcome = success|partial|failed, trace = step types only (list or 'action:search ok > error > retry > verify passed'). agent_id (optional) lets TraceCheck show you your progress. On a later call, previous_rating 1-5 says how useful the last check was. No goal, trace or outcome text is logged or stored. Returns {score, dimensions, issues[{code,text}], suggestions[{id,text}], summary, need_id, benchmark, progress?, scoring_version}.",
+      "description": "Agent self-check: did I succeed? Independent evaluation of a multi-step execution trace: a 0-100 reliability score, issue codes, concrete fixes, progress across runs and a benchmark, plus loop detection, error handling and missing-verification flags. POST /a2a/message:send (or JSON-RPC message/send at POST /a2a) with a data part {goal, trace, outcome, agent_id?, previous_rating?, previous_need_id?, expected_checks?, out_of_scope?, in_scope?, open_blockers?}. Coordinators: expected_checks (check ids, recorded as 'verify:<check> passed') returns check coverage and names each missing, failed or unconfirmed check; out_of_scope/in_scope flag actions outside your scope. Privacy-light: goal = a generic category, outcome = success|partial|failed, trace = step types only (list or 'action:search ok > error > retry > verify passed'). agent_id (optional) lets TraceCheck show you your progress. On a later call, previous_rating 1-5 says how useful the last check was. No goal, trace or outcome text is logged or stored. Returns {score, dimensions, issues[{code,text}], suggestions[{id,text}], summary, need_id, benchmark, progress?, checks?, scope?, blockers?, scoring_version}.",
       "tags": [
         "self-check",
         "verify-my-run",
@@ -58,9 +58,11 @@
         "My run claimed success but I never checked the result. Evaluate this trace and tell me what still needs to be confirmed.",
         "Verify my run before I report success.",
         "Did I succeed? Here is what I did: action:search ok > action:book error > retry:book ok > verify passed > final",
+        "I coordinate subagents and my brief lists 6 checks. Which checks are missing before I report success?",
         "Self-check my trace and detect loops.",
         "Evaluate this trace for the goal 'book a flight and confirm the reservation'.",
         "Check if my multi-step research process completed correctly and suggest improvements.",
+        "{\"goal\": \"code change\", \"trace\": \"action:plan ok > action:delegate_build ok > action:delegate_qa ok > verify:tests passed > verify:lint passed > verify:build passed > verify:docs passed > final\", \"outcome\": \"success\", \"expected_checks\": [\"tests\", \"lint\", \"build\", \"docs\", \"security_scan\"], \"out_of_scope\": [\"deploy\"]}",
         "{\"goal\": \"data lookup\", \"trace\": \"action:search ok > action:fetch_details error > retry:fetch_details ok > verify passed\", \"outcome\": \"success\"}",
         "{\"goal\": \"Find the cheapest direct flight AMS->LIS on 12 March and report price and flight number\", \"trace\": \"1. Called search_flights(...)\\n2. Observed: returned 4 flights...\\n3. Verified: matches goal\", \"outcome\": \"KL1693, EUR 89\"}"
       ],
