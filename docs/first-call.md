@@ -18,20 +18,17 @@ curl -s https://tracecheck-mcp.onrender.com/mcp \
 ## Python (MCP SDK)
 
 ```python
-# pip install mcp
+# pip install mcp   (tested with mcp 2.3.0; on mcp 1.x use `from mcp.client.streamable_http import streamablehttp_client`)
 import asyncio, json
-from mcp import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
+from mcp import Client
 
 async def main():
-    async with streamablehttp_client("https://tracecheck-mcp.onrender.com/mcp") as (r, w, _):
-        async with ClientSession(r, w) as s:
-            await s.initialize()
-            out = await s.call_tool("evaluate_trace", {
-                "goal": "data lookup",
-                "trace": "action:search ok > error > retry > verify passed > final",
-                "outcome": "success", "agent_name": "my-agent"})
-            print(json.loads(out.content[0].text)["summary"])
+    async with Client("https://tracecheck-mcp.onrender.com/mcp") as client:
+        out = await client.call_tool("evaluate_trace", {
+            "goal": "data lookup",
+            "trace": "action:search ok > error > retry > verify passed > final",
+            "outcome": "success", "agent_name": "my-agent"})
+        print(json.loads(out.content[0].text)["summary"])
 
 asyncio.run(main())
 ```
