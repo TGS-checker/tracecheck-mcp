@@ -81,7 +81,7 @@ def test_health_reports_complete_config_flag():
     with TestClient(server.build_http_app()[0]) as client:
         body = client.get("/health").json()
     assert body["scoring_config_complete"] is (PRIVATE and not server.SCORING_CONFIG_FILLED)
-    assert body["version"] == body["scoring_version"] == "0.5.2"
+    assert body["version"] == body["scoring_version"] == "0.5.3"
 
 
 def test_versions_match_everywhere():
@@ -180,7 +180,12 @@ def test_no_fix_text_starts_generic_and_result_fixes_start_with_the_goal_check()
         for s in r["suggestions"]:
             assert not GENERIC.match(s["text"]), s["text"]
             if s["id"] in server.GOAL_FIXES:
-                assert s["text"].startswith(s["what_to_verify"]) and s["what_to_verify"] in server.WHAT_TO_VERIFY.values()
+                assert s["text"].startswith(s["what_to_verify"])
+                base = server.WHAT_TO_VERIFY.values()
+                # 0.5.3: when a requirement was lowered, what_to_verify names it first, then the goal check.
+                assert s["what_to_verify"] in base or any(
+                    s["what_to_verify"].startswith("Name which requirement was dropped or replaced, then ")
+                    and s["what_to_verify"].endswith(w[0].lower() + w[1:]) for w in base)
 
 
 def test_every_category_has_a_specific_check():
@@ -277,7 +282,8 @@ def test_progress_lists_resolved_open_new_and_compares_same_goal_only(tmp_path, 
     assert "not_compared" in c["progress"] and c["progress"]["resolved"] is None
     d = server.evaluate_trace("media production", "action:render ok > verify passed", "success",
                               agent_id="p051-new", previous_need_id="nd_0000000000")
-    assert "not found" in d["progress"]["note"]
+    assert "not in memory" in d["progress"]["note"]
+    assert d["progress"]["requested_previous_need_id"] == "nd_0000000000"
     line = json.loads((tmp_path / "c.jsonl").read_text().splitlines()[-2])
     assert line["score_delta"] is None
 

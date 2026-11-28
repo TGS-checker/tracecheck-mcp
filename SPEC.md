@@ -1,6 +1,6 @@
 # TraceCheck trace format and response spec — v1
 
-Status: v1.2, published with service 0.5.2 (scoring_version 0.5.2). Open spec: anyone may produce or consume this format.
+Status: v1.3, published with service 0.5.3 (scoring_version 0.5.3). Open spec: anyone may produce or consume this format.
 This spec describes **what** goes in and comes out. It does not describe how scores are computed.
 The hosted service uses a private, calibrated scoring configuration; scores are comparable only within the same `scoring_version` on the hosted service. Issue codes, fix ids and the response shape are the contract and do not depend on the configuration.
 
@@ -43,7 +43,7 @@ A free-text trace is also accepted, but not recommended. Input may be in any lan
 | `suggestions[]` | `{id, text, what_to_verify?, effectiveness}`. `id` is a `fix_id`. Ranked by measured effect when known. Fixes about the result start with the check for your goal type (`what_to_verify`), then the fix text from section 3. |
 | `suggestions[].effectiveness` | `{applied_n, avg_score_delta, confidence}` measured across agents, or `{applied_n: 0, note}` for a default fix. |
 | `benchmark` | `{goal_category, median, your_percentile, n, confidence}` from net data (other real agents only), or `{n: 0, note}` when there is not enough data. |
-| `progress` | When you return: `{previous_need_id, previous_score, compared_via, same_goal_category, score_delta, resolved[], still_open[], new[]}`. `score_delta`, `resolved`, `still_open` and `new` are only given when the goal category is the same as in the previous check (since 0.5.2 for the three lists); otherwise they are `null` and `not_compared` says why. `compared_via` is `previous_need_id` or `agent_id (your last check)`. Progress comes from short-lived server memory (by `previous_need_id` or `agent_id`); an unknown `previous_need_id` gives `{note}`. |
+| `progress` | When you return: `{previous_need_id, previous_score, compared_via, same_goal_category, score_delta, resolved[], still_open[], new[]}`. `score_delta`, `resolved`, `still_open` and `new` are only given when the goal category is the same as in the previous check (since 0.5.2 for the three lists); otherwise they are `null` and `not_compared` says why. `compared_via` is `previous_need_id` or `agent_id (your last check)`. Progress comes from short-lived server memory (by `previous_need_id` or `agent_id`). If you sent a `previous_need_id` that is no longer in memory (since 0.5.3), `progress` includes a `note` explaining that and `requested_previous_need_id`; when a last check for your `agent_id` is used instead, `compared_via` is `agent_id (your last check)` and the score is still returned. Send this response's `need_id` next time. |
 | `need_id` | Short id for this check. Send it back as `previous_need_id`. |
 | `agent_id` | Your pseudonymous id as TraceCheck sees it. |
 | `rating_request` | One line asking for an optional `previous_rating` on your next call. |
@@ -91,12 +91,12 @@ A free-text trace is also accepted, but not recommended. Input may be in any lan
 | `fix_add_outcome_status` | Send an outcome status: success, partial or failed. |
 | `fix_clarify_outcome` | Describe the concrete result and state how it satisfies the goal. |
 | `fix_report_honest_outcome` | <check for your goal type> Only report success when that check passed; otherwise report partial or failed and state what is still open. |
-| `fix_add_verification` | <check for your goal type> Record that check as a verify step, for example {'type':'verify','status':'passed'}, before you report success. |
+| `fix_add_verification` | <check for your goal type> Record that check as a verify step, for example {'type':'verify','status':'passed'}, before you report success. On a partial outcome: before you hand over remaining work or close the run. On a failed outcome: so the claimed failure is confirmed. |
 | `fix_specify_verification` | <check for your goal type> Keep your verify step, and state which result you confirmed against the goal. |
 | `fix_report_incomplete` | <check for your goal type> Until that check passes on complete data, report partial or failed, even when a retry returned some data. |
-| `fix_restore_or_confirm_requirement` | <check for your goal type> Restore the original requirement, or get confirmation that the lower option is acceptable, and say which requirement changed. |
+| `fix_restore_or_confirm_requirement` | <check for your goal type, starting with 'Name which requirement was dropped or replaced'> Restore the original requirement, or get confirmation that the lower option is acceptable, and say which requirement changed. |
 | `fix_choose_verify_kind` | <check for your goal type> Use a verification kind that fits this goal instead of another generic verify step, and state what you confirmed. |
-| `fix_verify_before_handoff` | <check for your goal type> Do this before you hand off, ask for approval or report, or say in the hand-off which check is still open. |
+| `fix_verify_before_handoff` | <check for your goal type> Do this first, then hand off, ask for approval or report. Only if you cannot verify without the other party, say in the hand-off which check is still open. |
 | `fix_resolve_open_observation` | <check for your goal type> Resolve the partial or empty data point first (re-check it or get the missing value), or report partial and name the open point. |
 | `fix_wait_for_complete_data` | <check for your goal type> Write results only after the data is complete; if you wrote early, re-check or rewrite them once the data is in. |
 | `fix_hand_over_remaining_work` | <check for your goal type> Name the remaining work and hand it over or schedule it (a handoff step), so it is not lost. |

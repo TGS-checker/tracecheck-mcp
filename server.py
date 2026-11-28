@@ -3,6 +3,8 @@ TraceCheck MCP Server
 A minimal agent-first service for independent evaluation of agent execution traces.
 Helps agents improve their own processes by providing objective feedback.
 
+v0.5.3: outcome-aware verification fix text, what_to_verify names a lowered requirement, verify-before-handoff
+as preferred order, expired previous_need_id explained in progress (requested_previous_need_id).
 v0.5.2: error_recovery is null (not 100) in dimensions/summary when not applicable, with the reason; progress compares
 resolved/still_open/new per goal type only (like score_delta); a typed verify step (verify_kind) adds observability.
 v0.5.1: order and open-end codes (handoff_before_verification, unresolved_partial_observation,
@@ -61,8 +63,8 @@ except OSError:  # e.g. installed via uvx/pip on a machine without /workspace
     LOG_FILE = Path.home() / ".tracecheck" / "calls.jsonl"
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-VERSION = "0.5.2"
-SCORING_VERSION = "0.5.2"  # POD retest-051: not-applicable shown as null, same-goal progress, order/verify calibration
+VERSION = "0.5.3"
+SCORING_VERSION = "0.5.3"  # POD retest-052: outcome-aware fixes, lowered-requirement check, need_id expiry note, open-data calibration
 # stdout carries JSON-RPC in stdio mode, so call lines go to stdout only in HTTP mode (set in main()).
 _CALL_STREAM = sys.stderr
 
@@ -611,10 +613,16 @@ def enrich_result(result: dict, *, goal: str, agent_id: str, optional: dict, not
                                         f"goal category '{prev.get('category')}', this one is '{category}'; issue codes of "
                                         f"different goal types are not comparable. Compare runs of the same goal type, and send "
                                         f"previous_need_id from the right response to pick the check to compare with.")
+        if lost:
+            progress["requested_previous_need_id"] = optional["previous_need_id"]
+            progress["note"] = ("previous_need_id was not in memory (checks are kept only until a service restart). "
+                                "Compared via your last check for this agent_id instead. "
+                                "Send this response's need_id next time.")
         result["progress"] = progress
     elif lost:
-        result["progress"] = {"note": "previous_need_id not found: checks are kept in memory for a limited time. "
-                                      "Send this response's need_id next time."}
+        result["progress"] = {"note": "previous_need_id was not in memory (checks are kept only until a service restart). "
+                                      "Send this response's need_id next time.",
+                              "requested_previous_need_id": optional["previous_need_id"]}
     extra_cases = [t for uc, t in LIVE_USE_CASES.items() if _UC_TRIGGER.get(uc) not in codes]
     if extra_cases:
         result["also_useful_for"] = extra_cases[0]
@@ -840,7 +848,7 @@ FIXES = {
                                           "and say which requirement changed.",
     "fix_choose_verify_kind": "Use a verification kind that fits this goal instead of another generic verify step, "
                               "and state what you confirmed.",
-    "fix_verify_before_handoff": "Do this before you hand off, ask for approval or report, or say in the hand-off which check is still open.",
+    "fix_verify_before_handoff": "Do this first, then hand off, ask for approval or report. Only if you cannot verify without the other party, say in the hand-off which check is still open.",
     "fix_resolve_open_observation": "Resolve the partial or empty data point first (re-check it or get the missing value), "
                                     "or report partial and name the open point.",
     "fix_wait_for_complete_data": "Write results only after the data is complete; if you wrote early, re-check or rewrite them once the data is in.",
@@ -1219,7 +1227,7 @@ def score_steps(goal: str, steps: list, outcome: str) -> dict:
     align -= _apply_order_codes(order_codes, issues, suggestions, caps, what, _ST)
     dimensions["goal_alignment"] = max(0, min(100, align))
     return _finish(dimensions, issues, suggestions, caps, privacy_mode=True, category=category,
-                   not_applicable=not_applicable)
+                   not_applicable=not_applicable, outcome_kind=_outcome_kind(outcome_l, claims_success))
 
 
 _ORDER_PENALTY_KEYS = {"handoff_before_verification": "align_handoff_penalty",
@@ -1363,7 +1371,7 @@ def score_text_trace(goal: str, trace: str, outcome: str) -> dict:
     dimensions["goal_alignment"] = max(0, min(100, align_score))
 
     return _finish(dimensions, issues, suggestions, caps, privacy_mode=False, category=category,
-                   not_applicable=not_applicable)
+                   not_applicable=not_applicable, outcome_kind=kind)
 
 
 def _text_order_and_open_ends(lines: list, outcome_kind: str) -> list:
@@ -1397,13 +1405,34 @@ def _text_order_and_open_ends(lines: list, outcome_kind: str) -> list:
     return found
 
 
+
+def _what_to_verify(category: str, issues: list) -> str:
+    """Goal-specific check. When a requirement was lowered, name that requirement first."""
+    what = WHAT_TO_VERIFY.get(category, WHAT_TO_VERIFY["other"])
+    if any(i.get("code") == "requirement_lowered" for i in issues):
+        rest = what[0].lower() + what[1:] if what else what
+        return f"Name which requirement was dropped or replaced, then {rest}"
+    return what
+
+
+def _fix_text(fix_id: str, outcome_kind: str) -> str:
+    """Fix wording that depends on the claimed outcome (success / partial / failed)."""
+    if fix_id == "fix_add_verification" and outcome_kind == "partial":
+        return ("Record that check as a verify step, for example {'type':'verify','status':'passed'}, "
+                "before you hand over remaining work or close the run.")
+    if fix_id == "fix_add_verification" and outcome_kind == "failed":
+        return ("Record that check as a verify step, for example {'type':'verify','status':'passed'}, "
+                "so the claimed failure is confirmed.")
+    return FIXES[fix_id]
+
+
 NOT_APPLICABLE_REASONS = {
     "error_recovery": "Null on purpose: the run had no errors and no empty or partial results, so there was nothing to "
                       "recover from. It does not count in score; do not read it as 100 or as a strength."}
 
 
 def _finish(dimensions: dict, issues: list, suggestions: list, caps: list, privacy_mode: bool,
-            category: str = "other", not_applicable: list | None = None) -> dict:
+            category: str = "other", not_applicable: list | None = None, outcome_kind: str = "other") -> dict:
     # 6. Overall score (weighted over the applicable dimensions), then critical-flaw caps
     not_applicable = not_applicable or []
     weights = {k: v for k, v in _W.items() if k not in not_applicable}
@@ -1414,9 +1443,9 @@ def _finish(dimensions: dict, issues: list, suggestions: list, caps: list, priva
 
     issues_out = [{"code": i["code"], "text": ISSUES[i["code"]][0],
                    **{k: v for k, v in i.items() if k != "code"}} for i in issues[:5]]
-    what = WHAT_TO_VERIFY.get(category, WHAT_TO_VERIFY["other"])
-    # Result fixes start with what to check for this goal type, then the general fix.
-    suggestions_out = [{"id": f, "text": (f"{what} {FIXES[f]}" if f in GOAL_FIXES else FIXES[f]),
+    what = _what_to_verify(category, issues)
+    # Result fixes start with what to check for this goal type, then the general (outcome-aware) fix.
+    suggestions_out = [{"id": f, "text": (f"{what} {_fix_text(f, outcome_kind)}" if f in GOAL_FIXES else _fix_text(f, outcome_kind)),
                         **({"what_to_verify": what} if f in GOAL_FIXES else {})}
                        for f in suggestions[:5]]
     na_reasons = {k: NOT_APPLICABLE_REASONS[k] for k in not_applicable if k in NOT_APPLICABLE_REASONS}
