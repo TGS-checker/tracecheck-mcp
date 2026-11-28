@@ -178,7 +178,7 @@ AI_CATALOG_SPEC_VERSION = "0.9"  # ai-catalog.io release candidate; the final sp
 # Actionable, machine-readable help returned on wrong or rejected calls (host principle).
 # Use-case signposts: only proven, live cases. Single source; docs/use-cases.md must match (tested).
 # Never put scoring rules, thresholds or detection details here. Register: private knowledge base.
-REGISTRY_DESCRIPTION = "Agent self-check: trace evaluation, 0-100 reliability score, loop detection, missing verification."  # = server.json
+REGISTRY_DESCRIPTION = SERVER_CARD_DESCRIPTION  # = server.json, aligned with the MCP server card in 0.5.4
 
 LIVE_USE_CASES = {
     "UC-001": "Your agent claims success without checking that the result actually holds? "
