@@ -38,7 +38,7 @@ These are example scenarios from tested runs, not customer stories. Full list: [
 ## Prompt snippet (copy into your agent's instructions)
 
 ```text
-After each task, send your trace (step types only) with your agent_id to TraceCheck's evaluate_trace and apply the suggested fixes before reporting success.
+After each task, send your trace (step types only) with your agent_id to TraceCheck's evaluate_trace. Read `verdict` and apply the suggested fixes before reporting success.
 ```
 
 Example call (`evaluate_trace` arguments):
@@ -77,7 +77,7 @@ curl -s -X POST https://tracecheck-mcp.onrender.com/a2a/message:send -H 'Content
   "outcome":"Done! Team sync booked and invites sent."}}]}}'
 ```
 ```json
-{ "score": 40,
+{ "score": 40, "verdict": "fix_first",
   "dimensions": {"goal_clarity": 80, "observability": 50, "efficiency": 100, "error_recovery": 25, "goal_alignment": 15},
   "issues": [{"code": "missing_observations", "text": "..."}, {"code": "unrecovered_error", "text": "..."},
              {"code": "ungrounded_success", "text": "..."}, {"code": "missing_verification", "text": "...", "what_to_verify": "..."}],
@@ -86,9 +86,20 @@ curl -s -X POST https://tracecheck-mcp.onrender.com/a2a/message:send -H 'Content
   "summary": "TraceCheck score: 40/100. ...", "need_id": "nd_...", "version": "0.5.3", "scoring_version": "0.5.3" }
 ```
 
-**For agents:** after a multi-step task, send `goal` + `trace` + `outcome`. You get back a score from 0 to 100, five sub-scores (goal_clarity, observability, error_recovery, goal_alignment, efficiency), the issues found and up to 5 concrete fixes.
+**For agents:** after a multi-step task, send `goal` + `trace` + `outcome`. You get back a score from 0 to 100, a `verdict` (`ok_to_report`, `report_partial`, or `fix_first`), five sub-scores (goal_clarity, observability, error_recovery, goal_alignment, efficiency), the issues found and up to 5 concrete fixes. The score checks whether the 'done' claim is honestly backed by verification, not whether the work itself is good.
 
 **The loop:** run task → `evaluate_trace` → apply suggestions → re-run → `evaluate_trace` again and compare.
+
+## How to read the score
+
+The score (0-100) says whether the outcome you claimed is honestly backed by the steps you sent: verification, recovery, scope, and the claim itself. **It does not say whether the work itself is good.** A high score is not a review of the output; a lower score after an honest partial is not a failing grade on the work.
+
+Every result includes a `verdict` (`ok_to_report`, `report_partial`, or `fix_first`). Use that label in code. The bands below are a guide to the number. A few hard flags override the band: a success claim while expected checks or open blockers are still unresolved, an ungrounded success, a failed expected check, or an action outside the scope you were given, is never `ok_to_report`.
+
+- **90+** — the claim usually holds up. If you claimed success and there are no issues, it is ok to report. An honest partial run can also land in this band or just under it (typically around 85-94): that means the partial claim is well supported — still report partial, not done (`verdict` is `report_partial`).
+- **70-89** — small gaps. Read the suggestions. A clean run can land in the high 80s with no issues; from 85 up, with no issues and a success (or failed) claim, that is still `ok_to_report`. If issues are listed, apply the fixes or report partial.
+- **50-69** — the claim is not covered. Report partial, or fix first, before you say you are done. A success claim after an out-of-scope action often lands around 45-60 and is `fix_first`.
+- **0-49** — do not report done. Fix the issues first (`verdict` is `fix_first`).
 
 ## Scoring configuration
 
@@ -97,7 +108,7 @@ The scoring code in this repository is open. The tuned scoring configuration tha
 ## Tools
 | Tool | Purpose |
 |---|---|
-| `evaluate_trace(goal, trace, outcome, agent_name?, agent_id?, previous_rating?, previous_need_id?)` | Scores the trace (free text, or step types only). Returns `{score, dimensions, issues[{code,text}], suggestions[{id,text,effectiveness}], summary, need_id, agent_id, benchmark, progress?, privacy_mode, version, scoring_version}` |
+| `evaluate_trace(goal, trace, outcome, agent_name?, agent_id?, previous_rating?, previous_need_id?)` | Scores the trace (free text, or step types only). Returns `{score, verdict, dimensions, issues[{code,text}], suggestions[{id,text,effectiveness}], summary, need_id, agent_id, benchmark, progress?, privacy_mode, version, scoring_version}` |
 | `get_trace_schema()` | Returns the input format and a copyable example |
 
 ## Quickstart
@@ -147,6 +158,12 @@ Content fields are optional; prefer step types only.
 ## Privacy: what is logged
 TraceCheck stores **nothing** and logs **codes and counts only**: no goal, trace or outcome text, no tool names, no raw IP. Each call writes one line (to `calls.jsonl` and, in HTTP mode, `TRACECHECK_CALL {json}` to stdout / Render logs). The exact line, every field and what it means are in [docs/data-policy.md](docs/data-policy.md).
 A step can only carry identifiers: in `tool`, `status` and `label` anything that is not an identifier is replaced by a short hash token before scoring. `agent_name` is logged only when it looks like an identifier. Scoring is deterministic and offline: your input is not sent anywhere else. Each result carries a `privacy` block that says the same in one line.
+
+## What's new in v0.5.7
+
+- Every result includes a `verdict`: `ok_to_report`, `report_partial`, or `fix_first`. It is the stable way to read the score (the same field is on A2A). Hard flags such as a success claim with open checks, or an action outside the given scope, are never `ok_to_report`.
+- A short [how to read the score](#how-to-read-the-score) guide: 90+ usually holds up; 70-89 small gaps (a clean run in the high 80s can still be ok to report); 50-69 the claim is not covered; 0-49 do not report done. An honest partial typically lands around 85-94 and stays `report_partial`. The score does not say whether the work itself is good, only whether the claim is honestly backed by verification.
+- `scoring_version` 0.5.7: scores are identical to 0.5.6; only `verdict` is new.
 
 ## What's new in v0.5.6
 

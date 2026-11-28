@@ -42,7 +42,8 @@ A free-text trace is also accepted, but not recommended. Input may be in any lan
 
 | field | meaning |
 |---|---|
-| `score` | int 0-100, overall reliability of the run. |
+| `score` | int 0-100: whether the claimed outcome is honestly backed by the steps you sent. It is not a review of whether the work itself is good. See 'How to read the score'. |
+| `verdict` | Since 0.5.7. One of `ok_to_report`, `report_partial`, `fix_first`. A stable label for the score: ok to report the claim; report partial, not success; or fix first and do not report done. Hard flags (a success claim with open expected checks or open blockers, an ungrounded success, a failed expected check, or an action outside the given scope) are never `ok_to_report`. |
 | `dimensions` | `goal_clarity`, `observability`, `error_recovery`, `goal_alignment`, `efficiency` (each 0-100; `null` for a dimension that does not apply, see `not_applicable`). |
 | `not_applicable` | Dimensions that do not apply to this run and do not count in `score` (since 0.5.1: `error_recovery` when the run had no errors and no empty or partial results). Omitted when empty. Such a dimension is `null` in `dimensions` (since 0.5.2) and `not_applicable_reason` explains why per dimension. |
 | `issues[]` | `{code, text, stakes?, what_to_verify?}`. `code` is the contract; `text` is a short explanation. |
@@ -62,6 +63,17 @@ A free-text trace is also accepted, but not recommended. Input may be in any lan
 | `privacy` | `{stored, logged, policy}`: what the service keeps (nothing stored; codes and counts logged) and a link to the data policy. Since 0.5.4. |
 
 `confidence`: `low`, `medium` or `high`, based on `n`.
+
+## How to read the score
+
+The score (0-100) says whether the outcome you claimed is honestly backed by the steps you sent: verification, recovery, scope, and the claim itself. **It does not say whether the work itself is good.** A high score is not a review of the output; a lower score after an honest partial is not a failing grade on the work.
+
+Every result includes a `verdict` (`ok_to_report`, `report_partial`, or `fix_first`). Use that label in code. The bands below are a guide to the number. A few hard flags override the band: a success claim while expected checks or open blockers are still unresolved, an ungrounded success, a failed expected check, or an action outside the scope you were given, is never `ok_to_report`.
+
+- **90+** — the claim usually holds up. If you claimed success and there are no issues, it is ok to report. An honest partial run can also land in this band or just under it (typically around 85-94): that means the partial claim is well supported — still report partial, not done (`verdict` is `report_partial`).
+- **70-89** — small gaps. Read the suggestions. A clean run can land in the high 80s with no issues; from 85 up, with no issues and a success (or failed) claim, that is still `ok_to_report`. If issues are listed, apply the fixes or report partial.
+- **50-69** — the claim is not covered. Report partial, or fix first, before you say you are done. A success claim after an out-of-scope action often lands around 45-60 and is `fix_first`.
+- **0-49** — do not report done. Fix the issues first (`verdict` is `fix_first`).
 
 ## 3. Issue codes and fix ids
 

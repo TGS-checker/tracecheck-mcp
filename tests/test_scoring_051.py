@@ -81,7 +81,7 @@ def test_health_reports_complete_config_flag():
     with TestClient(server.build_http_app()[0]) as client:
         body = client.get("/health").json()
     assert body["scoring_config_complete"] is (PRIVATE and not server.SCORING_CONFIG_FILLED)
-    assert body["version"] == "0.5.6" and body["scoring_version"] == "0.5.6"
+    assert body["version"] == "0.5.7" and body["scoring_version"] == "0.5.7"
 
 
 def test_versions_match_everywhere():

@@ -71,8 +71,8 @@ except OSError:  # e.g. installed via uvx/pip on a machine without /workspace
     LOG_FILE = Path.home() / ".tracecheck" / "calls.jsonl"
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-VERSION = "0.5.6"
-SCORING_VERSION = "0.5.6"  # 0.5.6: explicit id notes, no value echo; without context fields scores equal 0.5.5
+VERSION = "0.5.7"
+SCORING_VERSION = "0.5.7"  # 0.5.7: verdict field; scores identical to 0.5.6
 # stdout carries JSON-RPC in stdio mode, so call lines go to stdout only in HTTP mode (set in main()).
 _CALL_STREAM = sys.stderr
 
@@ -197,7 +197,7 @@ _SAMPLE_ARGS = {
 HOW_TO_CHECK_TRACE = [
     "Call get_trace_schema for the exact input format and a copy-paste example.",
     "Send step types only (privacy-light), e.g. 'action:search ok > error > retry > verify passed'.",
-    "Read the score (0-100), issues and suggestions; apply the fixes and evaluate again.",
+    "Read the score (0-100) and verdict (ok_to_report, report_partial, or fix_first), then the issues and suggestions; apply the fixes and evaluate again.",
 ]
 
 
@@ -370,6 +370,7 @@ TRACE_SCHEMA = {
         "issues": "list of {code, text}",
         "suggestions": "list of {id (fix_id), text}",
         "summary": "one line",
+        "verdict": "ok_to_report | report_partial | fix_first: how to read the score (ok_to_report: the success claim is honestly backed; report_partial: report partial, not success; fix_first: do not report done). See the score guide.",
         "need_id": "short id for this check; send it back as previous_need_id",
         "checks": "only with expected_checks: {expected, passed, coverage 'n/m', missing, failed, unconfirmed, reported_open, not_expected}. A missing check you also list in open_blockers counts as reported_open (honest hand-over), not as missing",
         "scope": "only with out_of_scope or in_scope: {exceeded: [tool ids]}",
@@ -1776,6 +1777,31 @@ NOT_APPLICABLE_REASONS = {
                       "recover from. It does not count in score; do not read it as 100 or as a strength."}
 
 
+# Public verdict (0.5.7): a stable reading of the score, not a second scoring rule. Bands are part of the
+# published contract (see README / first-call). Hard flags override the band so a scope violation or a
+# false success claim is never "ok to report", even when the number sits in a higher band.
+VERDICT_OK_MIN = 85
+VERDICT_FIX_BELOW = 50
+VERDICT_FIX_FIRST_CODES = (
+    "scope_exceeded",
+    "success_with_open_checks",
+    "success_with_open_blockers",
+    "ungrounded_success",
+    "expected_check_failed",
+)
+VERDICTS = ("ok_to_report", "report_partial", "fix_first")
+
+
+def verdict_for(score: int, issues: list, outcome_kind: str) -> str:
+    """ok_to_report | report_partial | fix_first. Scores are unchanged; this only labels them."""
+    codes = {i["code"] for i in issues}
+    if score < VERDICT_FIX_BELOW or codes & set(VERDICT_FIX_FIRST_CODES):
+        return "fix_first"
+    if outcome_kind == "partial" or issues or score < VERDICT_OK_MIN:
+        return "report_partial"
+    return "ok_to_report"
+
+
 def _finish(dimensions: dict, issues: list, suggestions: list, caps: list, privacy_mode: bool,
             category: str = "other", not_applicable: list | None = None, outcome_kind: str = "other",
             names: dict | None = None) -> dict:
@@ -1810,6 +1836,7 @@ def _finish(dimensions: dict, issues: list, suggestions: list, caps: list, priva
         "suggestions": suggestions_out,
         "issues_truncated": len(issues) > 5,
         "summary": summary,
+        "verdict": verdict_for(score, issues, outcome_kind),
         "dimensions": shown,
         **({"not_applicable": not_applicable, "not_applicable_reason": na_reasons} if not_applicable else {}),
         "privacy_mode": privacy_mode,

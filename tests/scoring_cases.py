@@ -52,7 +52,7 @@ def cases() -> dict:
 
 
 def summarize(result: dict) -> dict:
-    out = {"score": result["score"], "dimensions": result["dimensions"],
+    out = {"score": result["score"], "verdict": result.get("verdict"), "dimensions": result["dimensions"],
            "codes": [i["code"] for i in result["issues"]], "fix_ids": [s["id"] for s in result["suggestions"]]}
     for key in ("checks", "scope", "blockers"):  # 0.5.5, only present with a run context
         if key in result:
