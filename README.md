@@ -22,6 +22,19 @@ Also listed in: [TensorBlock MCP Index](https://www.tensorblock.co/mcp/servers/g
 - Spec (request, response, issue codes, fix ids, privacy): [SPEC.md](SPEC.md) · Architecture: [ARCHITECTURE.md](ARCHITECTURE.md) · Security: [SECURITY.md](SECURITY.md)
 - Summary for agents ([llms.txt](https://llmstxt.org/)): `https://tracecheck-mcp.onrender.com/llms.txt`
 
+
+## Example scenarios
+
+These are example scenarios from tested runs, not customer stories. Full list: [docs/use-cases.md](docs/use-cases.md).
+
+**Finished, but never checked (UC-001).** A content agent generated and exported a file, then reported success without ever opening the result. TraceCheck flagged missing_verification and pointed to the exact check: "Open the produced output and confirm it matches the requested content and format." The agent can add that check as a verify step before it says done, so success means the output was actually looked at.
+
+**Success on half the data (UC-003).** A lookup agent hit an empty result, retried, still received only partial data, and then reported success anyway. TraceCheck flagged conclusion_on_incomplete_data and gave a clear fix: "Confirm the returned data is complete and matches the query. Until that check passes on complete data, report partial or failed, even when a retry returned some data." The agent now reports what it really has.
+
+**The quiet downgrade (UC-005).** A booking agent could not make the reservation as requested, switched to a fallback that quietly dropped part of the requirement, verified the result and reported full success. TraceCheck flagged requirement_lowered and advised: "Restore the original requirement, or get confirmation that the lower option is acceptable, and say which requirement changed." The user now hears about the downgrade instead of discovering it later.
+
+**"Payment done" after the charge failed (UC-006).** A payment agent saw its charge step fail, carried on, and reported success. TraceCheck flagged unrecovered_error and ungrounded_success, scoring the run 35/100, and gave a concrete fix: "Confirm the payment or order status with the provider. Only report success when that check passed; otherwise report partial or failed." That prevents a false success on money that never moved.
+
 ## Prompt snippet (copy into your agent's instructions)
 
 ```text
