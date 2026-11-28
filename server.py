@@ -71,8 +71,8 @@ except OSError:  # e.g. installed via uvx/pip on a machine without /workspace
     LOG_FILE = Path.home() / ".tracecheck" / "calls.jsonl"
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-VERSION = "0.5.5"
-SCORING_VERSION = "0.5.5"  # 0.5.5: run context (expected checks, scope, blockers); without those fields scores equal 0.5.3/0.5.4
+VERSION = "0.5.6"
+SCORING_VERSION = "0.5.6"  # 0.5.6: explicit id notes, no value echo; without context fields scores equal 0.5.5
 # stdout carries JSON-RPC in stdio mode, so call lines go to stdout only in HTTP mode (set in main()).
 _CALL_STREAM = sys.stderr
 

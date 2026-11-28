@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tracecheck-mcp"
-version = "0.5.5"
+version = "0.5.6"
 description = "Agent self-check and independent trace evaluation: 0-100 reliability score, issue codes, concrete fixes, progress across runs and a benchmark. MCP + A2A. No content needed: send step types only."
 readme = "README.md"
 license = "MIT"

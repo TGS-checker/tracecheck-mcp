@@ -61,4 +61,4 @@ Here `security_scan` has no verify step, so the answer contains `"checks": {"cov
 
 `score` (0-100), `issues` (with `code`), `suggestions` (with `fix_id`), `summary`, `need_id`, `benchmark`, `scoring_version`, and a `privacy` line. With a checklist or scope also `checks`, `scope` or `blockers`. Apply the suggestions and call again with `previous_need_id` to see your progress. Not sure about the format? Call `get_trace_schema` first.
 
-Status: the curl, Python and A2A examples were run against the live endpoint on 2026-11-28. The coordinator example needs version 0.5.5 (see `/health`).
+Status: the curl, Python and A2A examples were run against the live endpoint on 2026-11-28. Identifier notes and the `invalid_argument_type` error need version 0.5.6 (see `/health`); the coordinator fields themselves have been available since 0.5.5.
