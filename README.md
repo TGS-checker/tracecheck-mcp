@@ -149,12 +149,18 @@ Since v0.4 TraceCheck stores **no content**: no goal, trace or outcome text, and
 `timestamp, version, agent_name, score, dimensions, issue_count, trace_length` (characters, or number of steps), `privacy_mode, client_name, client_version, transport, user_agent, ip_hash`.
 `agent_name` is whatever you choose to send (optional). The IP is never stored, only `sha256(TRACECHECK_IP_SALT:ip)[:16]`. Scoring is deterministic and offline: your input is not sent anywhere else.
 
+## What's new in v0.5.2
+
+- `dimensions.error_recovery` is `null` (not 100) when it does not apply; `not_applicable` lists it and `not_applicable_reason` says why. It never counts in `score`.
+- `progress` compares `resolved`, `still_open` and `new` only between checks of the same goal type, like `score_delta`; otherwise they are `null` and `not_compared` explains why. `compared_via` tells you whether `previous_need_id` or your `agent_id` picked the previous check.
+- Calibration: a handoff before any verification, and a partial result without a handover of the remaining work, now weigh a little heavier. A typed verify step (`verify_kind`) counts for observability even when the kind does not fit the goal.
+
 ## What's new in v0.5.1
 
 - New issue codes for order and open ends: `handoff_before_verification`, `unresolved_partial_observation`, `write_before_complete_data`, `partial_outcome_without_handover` (see SPEC.md).
 - New step type `handoff` (approval request, escalation). New goal types: scheduled batch work and media production.
 - Fixes about the result now start with the concrete check for your goal type, never with a generic step.
-- When a run had no errors or gaps, `error_recovery` is returned as `not_applicable`.
+- When a run had no errors or gaps, `error_recovery` is returned as `not_applicable` (shown as `null` in `dimensions` since 0.5.2).
 - `progress` lists `resolved`, `still_open` and `new` codes; `score_delta` is only compared between checks of the same goal type.
 - Always-on hosting: no cold start on the first call.
 

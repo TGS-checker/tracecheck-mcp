@@ -81,7 +81,7 @@ def test_health_reports_complete_config_flag():
     with TestClient(server.build_http_app()[0]) as client:
         body = client.get("/health").json()
     assert body["scoring_config_complete"] is (PRIVATE and not server.SCORING_CONFIG_FILLED)
-    assert body["version"] == body["scoring_version"] == "0.5.1"
+    assert body["version"] == body["scoring_version"] == "0.5.2"
 
 
 def test_versions_match_everywhere():
@@ -273,7 +273,8 @@ def test_progress_lists_resolved_open_new_and_compares_same_goal_only(tmp_path, 
     c = server.evaluate_trace("media production", "action:render ok > verify passed", "success",
                               agent_id="p051", previous_need_id=b["need_id"])
     assert c["progress"]["score_delta"] is None and c["progress"]["same_goal_category"] is False
-    assert "not_compared" in c["progress"] and "missing_verification" in c["progress"]["resolved"]
+    # 0.5.2: resolved/still_open/new are not compared across goal types either (see test_scoring_052.py)
+    assert "not_compared" in c["progress"] and c["progress"]["resolved"] is None
     d = server.evaluate_trace("media production", "action:render ok > verify passed", "success",
                               agent_id="p051-new", previous_need_id="nd_0000000000")
     assert "not found" in d["progress"]["note"]

@@ -70,7 +70,8 @@
   "align_handoff_penalty": 10,
   "align_open_observation_penalty": 20,
   "align_write_early_penalty": 10,
-  "align_partial_no_handover_penalty": 10
+  "align_partial_no_handover_penalty": 10,
+  "obs_verify_kind_bonus": 5
  },
  "text": {
   "near_dup_similarity": 1.0,

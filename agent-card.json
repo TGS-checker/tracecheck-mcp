@@ -1,7 +1,7 @@
 {
   "name": "TraceCheck",
   "description": "Agent self-check and independent trace evaluation: verify your run before you report success. Send your goal, the steps you took and the outcome you claim; get a 0-100 reliability score, issue codes, concrete fixes, progress across runs and a benchmark. Your agent claims success without checking that the result actually holds? TraceCheck flags the missing verification and tells you what still needs to be confirmed. Also covers loop detection and error handling. No content needed: send step types only. Optional agent_id (lets TraceCheck show you your progress), and previous_rating (1-5) with previous_need_id on a later call. No goal, trace or outcome text is logged or stored. Free, no API key. Discoverable via MCP and A2A. Also an MCP server at https://tracecheck-mcp.onrender.com/mcp (tools evaluate_trace, get_trace_schema). Summary: https://tracecheck-mcp.onrender.com/llms.txt",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "provider": {
     "organization": "TraceCheck (test)",
     "url": "https://tracecheck-mcp.onrender.com"

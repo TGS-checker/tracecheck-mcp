@@ -1,6 +1,6 @@
 # TraceCheck trace format and response spec — v1
 
-Status: v1.1, published with service 0.5.1 (scoring_version 0.5.1). Open spec: anyone may produce or consume this format.
+Status: v1.2, published with service 0.5.2 (scoring_version 0.5.2). Open spec: anyone may produce or consume this format.
 This spec describes **what** goes in and comes out. It does not describe how scores are computed.
 The hosted service uses a private, calibrated scoring configuration; scores are comparable only within the same `scoring_version` on the hosted service. Issue codes, fix ids and the response shape are the contract and do not depend on the configuration.
 
@@ -36,14 +36,14 @@ A free-text trace is also accepted, but not recommended. Input may be in any lan
 | field | meaning |
 |---|---|
 | `score` | int 0-100, overall reliability of the run. |
-| `dimensions` | `goal_clarity`, `observability`, `error_recovery`, `goal_alignment`, `efficiency` (each 0-100). |
-| `not_applicable` | Dimensions that do not apply to this run and do not count in `score` (since 0.5.1: `error_recovery` when the run had no errors and no empty or partial results). Omitted when empty. |
+| `dimensions` | `goal_clarity`, `observability`, `error_recovery`, `goal_alignment`, `efficiency` (each 0-100; `null` for a dimension that does not apply, see `not_applicable`). |
+| `not_applicable` | Dimensions that do not apply to this run and do not count in `score` (since 0.5.1: `error_recovery` when the run had no errors and no empty or partial results). Omitted when empty. Such a dimension is `null` in `dimensions` (since 0.5.2) and `not_applicable_reason` explains why per dimension. |
 | `issues[]` | `{code, text, stakes?, what_to_verify?}`. `code` is the contract; `text` is a short explanation. |
 | `issues_truncated` | `true` when more than 5 issues were found and the list was cut. |
 | `suggestions[]` | `{id, text, what_to_verify?, effectiveness}`. `id` is a `fix_id`. Ranked by measured effect when known. Fixes about the result start with the check for your goal type (`what_to_verify`), then the fix text from section 3. |
 | `suggestions[].effectiveness` | `{applied_n, avg_score_delta, confidence}` measured across agents, or `{applied_n: 0, note}` for a default fix. |
 | `benchmark` | `{goal_category, median, your_percentile, n, confidence}` from net data (other real agents only), or `{n: 0, note}` when there is not enough data. |
-| `progress` | When you return: `{previous_need_id, previous_score, same_goal_category, score_delta, resolved[], still_open[], new[]}`. `score_delta` is only given when the goal category is the same as in the previous check; otherwise it is `null` and `not_compared` says why. Progress comes from short-lived server memory (by `previous_need_id` or `agent_id`); an unknown `previous_need_id` gives `{note}`. |
+| `progress` | When you return: `{previous_need_id, previous_score, compared_via, same_goal_category, score_delta, resolved[], still_open[], new[]}`. `score_delta`, `resolved`, `still_open` and `new` are only given when the goal category is the same as in the previous check (since 0.5.2 for the three lists); otherwise they are `null` and `not_compared` says why. `compared_via` is `previous_need_id` or `agent_id (your last check)`. Progress comes from short-lived server memory (by `previous_need_id` or `agent_id`); an unknown `previous_need_id` gives `{note}`. |
 | `need_id` | Short id for this check. Send it back as `previous_need_id`. |
 | `agent_id` | Your pseudonymous id as TraceCheck sees it. |
 | `rating_request` | One line asking for an optional `previous_rating` on your next call. |

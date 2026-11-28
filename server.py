@@ -3,6 +3,8 @@ TraceCheck MCP Server
 A minimal agent-first service for independent evaluation of agent execution traces.
 Helps agents improve their own processes by providing objective feedback.
 
+v0.5.2: error_recovery is null (not 100) in dimensions/summary when not applicable, with the reason; progress compares
+resolved/still_open/new per goal type only (like score_delta); a typed verify step (verify_kind) adds observability.
 v0.5.1: order and open-end codes (handoff_before_verification, unresolved_partial_observation,
 write_before_complete_data, partial_outcome_without_handover), step type handoff, result fixes start with the
 goal-specific check, error recovery not applicable without errors, progress compares score_delta per goal type only.
@@ -59,8 +61,8 @@ except OSError:  # e.g. installed via uvx/pip on a machine without /workspace
     LOG_FILE = Path.home() / ".tracecheck" / "calls.jsonl"
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-VERSION = "0.5.1"
-SCORING_VERSION = "0.5.1"  # POD batch 2026-11-27: order/open-end codes, goal-specific fixes, recovery calibration
+VERSION = "0.5.2"
+SCORING_VERSION = "0.5.2"  # POD retest-051: not-applicable shown as null, same-goal progress, order/verify calibration
 # stdout carries JSON-RPC in stdio mode, so call lines go to stdout only in HTTP mode (set in main()).
 _CALL_STREAM = sys.stderr
 
@@ -308,7 +310,7 @@ TRACE_SCHEMA = {
     "content_fields": "Optional. Prefer step types only; free-text content is not required.",
     "returned_fields": {
         "score": "int 0-100, overall reliability",
-        "dimensions": "goal_clarity, observability, error_recovery, goal_alignment, efficiency (each 0-100)",
+        "dimensions": "goal_clarity, observability, error_recovery, goal_alignment, efficiency (each 0-100; a dimension that does not apply is null and listed in not_applicable with the reason)",
         "issues": "list of {code, text}",
         "suggestions": "list of {id (fix_id), text}",
         "summary": "one line",
@@ -593,18 +595,22 @@ def enrich_result(result: dict, *, goal: str, agent_id: str, optional: dict, not
         prev = _AGENT_LAST.get(agent_id)
     if prev and prev.get("agent_id") == agent_id:
         same = prev.get("category") == category
+        via = "previous_need_id" if optional.get("previous_need_id") and not lost else "agent_id (your last check)"
         progress = {
             "previous_need_id": prev.get("need_id"),
             "previous_score": prev["score"],
+            "compared_via": via,
             "same_goal_category": same,
             "score_delta": (result["score"] - prev["score"]) if same else None,
-            "resolved": [c for c in prev["codes"] if c not in codes],
-            "still_open": [c for c in codes if c in prev["codes"]],
-            "new": [c for c in codes if c not in prev["codes"]],
+            "resolved": [c for c in prev["codes"] if c not in codes] if same else None,
+            "still_open": [c for c in codes if c in prev["codes"]] if same else None,
+            "new": [c for c in codes if c not in prev["codes"]] if same else None,
         }
         if not same:
-            progress["not_compared"] = (f"score_delta not compared: the previous check was for goal category "
-                                        f"'{prev.get('category')}', this one is '{category}'. Compare runs of the same goal type.")
+            progress["not_compared"] = (f"score_delta, resolved, still_open and new not compared: the previous check was for "
+                                        f"goal category '{prev.get('category')}', this one is '{category}'; issue codes of "
+                                        f"different goal types are not comparable. Compare runs of the same goal type, and send "
+                                        f"previous_need_id from the right response to pick the check to compare with.")
         result["progress"] = progress
     elif lost:
         result["progress"] = {"note": "previous_need_id not found: checks are kept in memory for a limited time. "
@@ -1088,6 +1094,8 @@ def score_steps(goal: str, steps: list, outcome: str) -> dict:
         obs += _ST["obs_observe_bonus"]
     elif distinct <= _ST["obs_bare_max_steps"]:
         obs -= _ST["obs_no_observe_penalty"]  # a bare trace without any observation says little
+    if any(s["type"] == "verify" and s.get("verify_kind") for s in steps):
+        obs += _ST["obs_verify_kind_bonus"]  # a typed verify step shows what was observed, even if the kind does not fit
     actions = [s for s in steps if s["type"] == "action"]
     with_status = sum(1 for s in actions if s["status"]) + sum(1 for s in steps if s["type"] == "observe")
     if actions and with_status >= _ST["obs_status_share"] * len(actions):
@@ -1389,6 +1397,11 @@ def _text_order_and_open_ends(lines: list, outcome_kind: str) -> list:
     return found
 
 
+NOT_APPLICABLE_REASONS = {
+    "error_recovery": "Null on purpose: the run had no errors and no empty or partial results, so there was nothing to "
+                      "recover from. It does not count in score; do not read it as 100 or as a strength."}
+
+
 def _finish(dimensions: dict, issues: list, suggestions: list, caps: list, privacy_mode: bool,
             category: str = "other", not_applicable: list | None = None) -> dict:
     # 6. Overall score (weighted over the applicable dimensions), then critical-flaw caps
@@ -1406,10 +1419,12 @@ def _finish(dimensions: dict, issues: list, suggestions: list, caps: list, priva
     suggestions_out = [{"id": f, "text": (f"{what} {FIXES[f]}" if f in GOAL_FIXES else FIXES[f]),
                         **({"what_to_verify": what} if f in GOAL_FIXES else {})}
                        for f in suggestions[:5]]
+    na_reasons = {k: NOT_APPLICABLE_REASONS[k] for k in not_applicable if k in NOT_APPLICABLE_REASONS}
+    shown = {k: (None if k in na_reasons else v) for k, v in dimensions.items()}  # not applicable: null, never a fake 100
     summary = (
         f"TraceCheck score: {score}/100. "
         f"Dimensions: observability {dimensions['observability']}, "
-        f"error recovery {dimensions['error_recovery']}, "
+        f"error recovery {'n/a (not counted)' if 'error_recovery' in na_reasons else dimensions['error_recovery']}, "
         f"goal alignment {dimensions['goal_alignment']}, "
         f"efficiency {dimensions['efficiency']}. "
         + (f"{len(issues)} issue(s): {', '.join(i['code'] for i in issues)}." if issues else "No issues found.")
@@ -1420,8 +1435,8 @@ def _finish(dimensions: dict, issues: list, suggestions: list, caps: list, priva
         "suggestions": suggestions_out,
         "issues_truncated": len(issues) > 5,
         "summary": summary,
-        "dimensions": dimensions,
-        **({"not_applicable": not_applicable} if not_applicable else {}),
+        "dimensions": shown,
+        **({"not_applicable": not_applicable, "not_applicable_reason": na_reasons} if not_applicable else {}),
         "privacy_mode": privacy_mode,
         "version": VERSION,
         "scoring_version": SCORING_VERSION,
