@@ -99,7 +99,7 @@ def test_bad_ids_teach_the_shape_and_are_never_echoed_or_logged(monkeypatch):
                out_of_scope="deploy, delete_branch", open_blockers=True)
     assert r["checks"]["expected"] == 1
     notes = " ".join(r["notes"])
-    assert "expected_checks: 4 value(s) ignored" in notes and "lowercase letters" in notes and "e.g." in notes
+    assert "expected_checks: items 2, 3, 4 and 5 ignored" in notes and "lowercase letters" in notes and "e.g." in notes
     assert "open_blockers was ignored" in notes
     dump = json.dumps(r) + out.getvalue()
     assert "nightjar" not in dump.lower() and "x" * 41 not in dump
@@ -112,7 +112,7 @@ def test_bad_ids_teach_the_shape_and_are_never_echoed_or_logged(monkeypatch):
 def test_list_limits_and_dedupe():
     ctx, notes = server.parse_run_context(expected_checks=["a", "A", "a "] + [f"c{i}" for i in range(40)])
     assert ctx["expected_checks"][0] == "a" and len(ctx["expected_checks"]) == server.CONTEXT_LIST_MAX
-    assert notes and "max 30" in notes[0]
+    assert any("normalized" in n for n in notes) and any("maximum of 30" in n for n in notes)
     assert server.parse_run_context(open_blockers=5000)[1]
     assert server.parse_run_context(open_blockers="3")[0] == {"open_blockers": {"count": 3}}
 

@@ -36,6 +36,8 @@ TRACECHECK_CALL {"event_id": "2fd1de1642144bbc", "event_type": "call", "ts_utc":
 | `knowledge_match`, `benchmark_given` | Whether benchmark data was available for your check. |
 | `context` | Only when you send `expected_checks`, `out_of_scope`, `in_scope` or `open_blockers`: counts only (`expected_checks_n`, `passed_checks_n`, `scope_given`, `scope_exceeded_n`, `open_blockers_n`). The check, tool and blocker ids themselves are never logged. Otherwise `null`. |
 
+An argument of the wrong type gets a plain JSON error that names the argument only; the value you sent is not repeated in the answer or the log.
+
 ## Counters
 
 For service health and for knowing whether the service is findable and used, the server counts events (for example: card fetched, tools listed, check completed) per day, per coarse client family and per kind. A `TRACECHECK_STAGE` line has the fields `event_type`, `ts_utc`, `server_version`, `day`, `stage`, `client_family`, `kind`, `n` and `u_day` (distinct visitors that day, counted with a hash that rotates daily and lives only in memory). Counts only: no addresses, no content.

@@ -56,7 +56,7 @@ import sys
 import threading
 import time
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -327,13 +327,15 @@ TRACE_SCHEMA = {
         "expected_checks": "list of check ids, optional (e.g. ['tests','lint','visual']). The checks your brief or "
                            "checklist asked for. Record each as a verify step with the same id: 'verify:tests passed' "
                            "or {type:'verify', check:'tests', status:'passed'}. Returned: checks.coverage (n/m) and the "
-                           "missing, failed and unconfirmed check ids.",
+                           "missing, failed and unconfirmed check ids. If a delegate or sub-agent ran a check, record its "
+                           "result yourself as verify:<check> passed once you have seen it (verify_kind human or end_to_end).",
         "out_of_scope": "list of tool ids, optional. Tools you were told not to use; an action with one is reported as scope_exceeded.",
         "in_scope": "list of tool ids, optional. The only tools you were allowed to use; any other action tool is reported as scope_exceeded.",
         "open_blockers": "int or list of ids, optional. What is still blocked at hand-over. A success claim with open blockers is flagged.",
         "id_rules": "expected_checks, out_of_scope, in_scope and open_blockers take identifiers only: lowercase letters, "
-                    "digits and _ . : / - (max 40 characters, max 30 per list). Other values are ignored with a line in "
-                    "notes; they are never echoed or logged.",
+                    "digits and _ . : / - (max 40 characters, max 30 per list). Capitals and spaces are normalized "
+                    "('Unit Tests' becomes unit_tests) and a line in notes says which items; other values are ignored "
+                    "with a line in notes that names the position, never the value. Values are never echoed or logged.",
     },
     "example_call": _PRIVACY_LIGHT_EXAMPLE,  # default, shown first: privacy-light, no content
     "example_compact_trace": _PRIVACY_LIGHT_COMPACT,
@@ -808,17 +810,17 @@ def evaluate_trace(
         "or a false success claim)."))] = None,
     previous_need_id: Annotated[str | None, Field(description=(
         "Optional: the need_id from your last TraceCheck response, sent with previous_rating."))] = None,
-    expected_checks: Annotated[list[str] | str | None, Field(description=(
+    expected_checks: Annotated[list[Any] | str | None, Field(description=(
         "Optional: ids of the checks your brief asked you to run, e.g. ['tests','lint','visual']. Record each one "
         "as a verify step with the same id ('verify:tests passed'). TraceCheck reports coverage and names every "
         "missing, failed or unconfirmed check. Identifiers only."))] = None,
-    out_of_scope: Annotated[list[str] | str | None, Field(description=(
+    out_of_scope: Annotated[list[Any] | str | None, Field(description=(
         "Optional: tool ids you were told not to use, e.g. ['deploy','delete_branch']. An action step with one of "
         "these tools is reported as scope_exceeded. Identifiers only."))] = None,
-    in_scope: Annotated[list[str] | str | None, Field(description=(
+    in_scope: Annotated[list[Any] | str | None, Field(description=(
         "Optional: the only tool ids you were allowed to use. Any other action tool is reported as "
         "scope_exceeded. Identifiers only."))] = None,
-    open_blockers: Annotated[int | list[str] | str | None, Field(description=(
+    open_blockers: Annotated[int | list[Any] | str | None, Field(description=(
         "Optional: what is still blocked at hand-over, as a count (e.g. 2) or a list of ids "
         "(e.g. ['missing_asset']). A success claim with open blockers is flagged."))] = None,
     ctx: Context | None = None,
@@ -942,7 +944,14 @@ FIXES = {
     "fix_report_partial_open_checks": "Report partial, not success, and name the checks that are still open: {names}.",
     "fix_stay_in_scope": "Undo or report these out-of-scope actions, and ask before doing work outside the scope you were given: {names}.",
     "fix_report_open_blockers": "Report partial, not success, and list the open blockers in your hand-over.",
+    "fix_run_open_checks_before_handoff": "Run the checks you reported as open before you hand over, and record each one as a "
+                                          "verify step; a check that is still open lowers the value of the hand-over: {names}.",
 }
+# Appended when the trace shows work handed to a delegate (a sub-agent or another agent): the coordinator is the one
+# who records the verification, once it has seen the delegate's result.
+DELEGATE_HINT = (" If a delegate ran the check, record its result yourself as verify:<check> passed once you have seen "
+                 "that result (add verify_kind: human or end_to_end); delegating alone is not a verification.")
+_DELEGATE_FIXES = ("fix_add_verification", "fix_run_expected_checks", "fix_report_partial_open_checks")
 CONTEXT_CODES = ("expected_check_missing", "expected_check_failed", "expected_check_unconfirmed",
                  "success_with_open_checks", "scope_exceeded", "success_with_open_blockers")
 
@@ -958,6 +967,7 @@ def _flag(issues: list, fixes: list, code: str, fix_id: str | None = None, **att
         fixes.append(fid)
 
 
+_DELEGATE_WORDS = tuple(SC["words"].get("delegate_tools") or ("delegate", "subagent", "sub_agent"))
 _IDENT_RE = re.compile(r"^[a-z0-9_.:/\-]+$")
 
 
@@ -983,9 +993,29 @@ CONTEXT_ID_SHAPE = ("short identifiers: lowercase letters, digits and _ . : / - 
                     "max 30 per list), e.g. ['tests', 'lint', 'visual_check']")
 
 
+def _positions(idx: list) -> str:
+    """'item 2' / 'items 2, 5 and 7' (1-based). Positions only: never the value itself."""
+    idx = sorted(idx)
+    shown = [str(i) for i in idx[:8]]
+    if len(idx) == 1:
+        return f"item {shown[0]}"
+    if len(idx) > 8:
+        return "items " + ", ".join(shown) + ", ..."
+    return "items " + ", ".join(shown[:-1]) + " and " + shown[-1]
+
+
+_ZERO_IDS_NOTE = {
+    "expected_checks": "no usable check ids were found, so no check coverage is reported.",
+    "out_of_scope": "no usable tool ids were found, so no scope is applied.",
+    "in_scope": "no usable tool ids were found, so no scope is applied.",
+    "open_blockers": "no usable blocker ids were found, so no blockers are counted.",
+}
+
+
 def _context_ids(value, field: str, notes: list) -> list | None:
-    """A list of identifiers (or a comma-separated string). Anything else is dropped with a note that teaches the
-    shape. Dropped values are never echoed or logged: they could be text."""
+    """A list of identifiers (or a comma-separated string). Text that only needs tidying (capitals, spaces) is
+    normalized and the note says so; anything else is dropped. Notes name the position of an item, never its
+    content: a dropped value could be text, so it is never echoed or logged."""
     if value is None or value == "" or value == []:
         return None
     if isinstance(value, str):
@@ -993,19 +1023,33 @@ def _context_ids(value, field: str, notes: list) -> list | None:
     if not isinstance(value, (list, tuple)):
         notes.append(f"{field} was ignored: send a list of {CONTEXT_ID_SHAPE}.")
         return None
-    ids, dropped = [], 0
-    for v in value:
-        t = str(v).strip().lower().replace(" ", "_") if isinstance(v, (str, int)) and not isinstance(v, bool) else ""
+    ids, dropped, normalized, extra = [], [], [], 0
+    for pos, v in enumerate(value, start=1):
+        if not isinstance(v, str):
+            dropped.append(pos)  # numbers, objects, booleans and nulls are not identifiers
+            continue
+        raw = v.strip()
+        t = raw.lower().replace(" ", "_")
         if t and _CONTEXT_ID_RE.match(t):
-            if t not in ids:
-                ids.append(t)
+            if t != raw:
+                normalized.append(pos)
+            if t in ids:
+                continue
+            if len(ids) >= CONTEXT_LIST_MAX:
+                extra += 1
+                continue
+            ids.append(t)
         else:
-            dropped += 1
-    if len(ids) > CONTEXT_LIST_MAX:
-        dropped += len(ids) - CONTEXT_LIST_MAX
-        ids = ids[:CONTEXT_LIST_MAX]
+            dropped.append(pos)
+    if normalized:
+        notes.append(f"{field}: {_positions(normalized)} normalized to lowercase with spaces as _ (the form that is "
+                     "matched; use the same id in your verify steps and tool ids).")
     if dropped:
-        notes.append(f"{field}: {dropped} value(s) ignored. Use {CONTEXT_ID_SHAPE}.")
+        notes.append(f"{field}: {_positions(dropped)} ignored (not an identifier). Use {CONTEXT_ID_SHAPE}.")
+    if extra:
+        notes.append(f"{field}: {extra} item(s) beyond the maximum of {CONTEXT_LIST_MAX} per list ignored.")
+    if not ids:
+        notes.append(f"{field}: {_ZERO_IDS_NOTE.get(field, 'no usable identifiers were found.')}")
     return ids or None
 
 
@@ -1080,20 +1124,41 @@ def score_context(steps: list, ctx: dict, claims_success: bool, issues: list, su
                 _flag(issues, suggestions, code, checks=ids)
                 names[fix] = ids
                 part += table[key] * len(ids)
+        # 0.5.6: a check reported as an open blocker is honest, but it is still not run. Neutral (0) unless the
+        # configuration gives it a value, so older configurations score exactly as before.
+        part += table.get("align_reported_open_penalty", 0) * len(reported_open)
+        if reported_open:
+            names["fix_run_open_checks_before_handoff"] = reported_open
+            if "fix_run_open_checks_before_handoff" not in suggestions:
+                suggestions.append("fix_run_open_checks_before_handoff")
         penalty += min(part, table["align_check_penalty_max"])
         open_checks = missing + failed + unconfirmed + reported_open
         if claims_success and open_checks:
             _flag(issues, suggestions, "success_with_open_checks", checks=open_checks)
             names["fix_report_partial_open_checks"] = open_checks
             penalty += table["align_open_checks_success_penalty"]
-            caps.append((_CAPS["open_checks_success"], "success claimed with open expected checks"))
+            # 0.5.6: the same gap is named by two codes; an optional credit (default 0) keeps it from counting twice.
+            penalty -= min(table.get("align_open_checks_overlap_credit", 0), part)
+            if table.get("align_no_verify_overlap_credit", 0) and any(i["code"] == "missing_verification" for i in issues):
+                penalty -= table["align_no_verify_overlap_credit"]
+            cap = _CAPS.get("open_checks_success_base", _CAPS["open_checks_success"])
+            # 0.5.6: the ceiling can fall with the number of open checks and when none was confirmed. Optional values:
+            # absent means the single ceiling of 0.5.5.
+            cap -= _CAPS.get("open_checks_success_per_extra", 0) * (len(open_checks) - 1)
+            cap = max(cap, min(_CAPS.get("open_checks_success_floor", 0), cap))
+            if not passed:
+                cap = min(cap, _CAPS.get("open_checks_none_confirmed", cap))
+            caps.append((cap, "success claimed with open expected checks"))
     out_scope, in_scope = ctx.get("out_of_scope"), ctx.get("in_scope")
     if out_scope or in_scope:
-        tools = []
+        tools, heavy = [], False
+        destructive = SC["words"].get("destructive_tools") or []
         for st in steps:
             if st["type"] in ("action", "retry", "fallback") and st.get("tool"):
                 t = st["tool"]
                 outside = (out_scope and t in out_scope) or (in_scope and t not in in_scope)
+                if outside:
+                    heavy = heavy or st.get("stakes") == "high" or bool(set(re.split(r"[_.:/\-]", t)) & set(destructive))
                 if outside and t not in tools:
                     tools.append(t)
         block["scope"] = {"exceeded": tools}
@@ -1101,7 +1166,11 @@ def score_context(steps: list, ctx: dict, claims_success: bool, issues: list, su
             _flag(issues, suggestions, "scope_exceeded", tools=tools)
             names["fix_stay_in_scope"] = tools
             penalty += table["align_scope_penalty"]
-            caps.append((_CAPS["scope_exceeded"], "action outside the given scope"))
+            cap = _CAPS["scope_exceeded"]
+            if heavy:  # 0.5.6: an out-of-scope action that is destructive or high-stakes weighs more (optional values)
+                penalty += table.get("align_scope_heavy_extra", 0)
+                cap = min(cap, _CAPS.get("scope_exceeded_heavy", cap))
+            caps.append((cap, "action outside the given scope"))
     blockers = ctx.get("open_blockers")
     if blockers is not None:
         block["blockers"] = {"open": blockers["count"], **({"ids": blockers["ids"]} if blockers.get("ids") else {})}
@@ -1479,6 +1548,8 @@ def score_steps(goal: str, steps: list, outcome: str, context: dict | None = Non
     if context and context.get("open_blockers", {}).get("count") and "partial_outcome_without_handover" in order_codes:
         order_codes = [c for c in order_codes if c != "partial_outcome_without_handover"]  # named blockers = hand-over
     align -= _apply_order_codes(order_codes, issues, suggestions, caps, what, _ST)
+    if any(st["type"] == "action" and st.get("tool") and any(w in st["tool"] for w in _DELEGATE_WORDS) for st in steps):
+        names["_delegated"] = True
     if context:
         ctx_penalty, block = score_context(steps, context, claims_success, issues, suggestions, caps, names, _ST)
         align -= ctx_penalty
@@ -1486,6 +1557,10 @@ def score_steps(goal: str, steps: list, outcome: str, context: dict | None = Non
     result = _finish(dimensions, issues, suggestions, caps, privacy_mode=True, category=category,
                      not_applicable=not_applicable, outcome_kind=_outcome_kind(outcome_l, claims_success), names=names)
     result.update(block)
+    checks = block.get("checks")
+    if checks and not issues and checks["passed"] == checks["expected"] and result["summary"].endswith("No issues found."):
+        n = checks["expected"]
+        result["summary"] = result["summary"][:-1] + f"; all {n} expected check{'s' if n != 1 else ''} confirmed."
     return result
 
 
@@ -1687,8 +1762,12 @@ def _fix_text(fix_id: str, outcome_kind: str, names: dict | None = None) -> str:
         return ("Record that check as a verify step, for example {'type':'verify','status':'passed'}, "
                 "so the claimed failure is confirmed.")
     text = FIXES[fix_id]
+    if fix_id == "fix_add_verification" and (names or {}).get("_delegated"):
+        text = text.rstrip() + DELEGATE_HINT
     if "{names}" in text:
         text = text.replace("{names}", ", ".join((names or {}).get(fix_id) or ["see issues"]))
+    if fix_id in _DELEGATE_FIXES and fix_id != "fix_add_verification" and (names or {}).get("_delegated"):
+        text = text.rstrip() + DELEGATE_HINT
     return text
 
 
@@ -1961,6 +2040,51 @@ def _did_you_mean(name: str, known: list[str]) -> str | None:
     return hits[0] if hits else None
 
 
+# A wrong argument type must never produce the raw validation text: it repeats the values that were sent.
+_ARGUMENT_SHAPES = {
+    "goal": "a string, e.g. 'code change'",
+    "trace": "a string like 'action:build ok > verify:tests passed' or a list of step objects",
+    "outcome": "a string: 'success', 'partial' or 'failed'",
+    "agent_name": "a string",
+    "agent_id": "a string of 1-64 characters",
+    "previous_rating": "an integer from 1 to 5",
+    "previous_need_id": "a string (the need_id from your last response)",
+    "expected_checks": "a list of short identifiers, e.g. ['tests', 'lint']",
+    "out_of_scope": "a list of short tool identifiers, e.g. ['deploy']",
+    "in_scope": "a list of short tool identifiers, e.g. ['search']",
+    "open_blockers": "a number or a list of short identifiers",
+}
+
+
+def _is_argument_validation_error(message: str) -> bool:
+    return "validation error" in message and "Arguments" in message.split("\n", 1)[0]
+
+
+def _invalid_argument_names(message: str, tool_name: str = "evaluate_trace") -> list:
+    """Argument names from a pydantic error, taken only from the field paths (never the values), and only if they
+    are arguments we know. A name the caller invented is counted, not repeated."""
+    names = []
+    for line in message.split("\n")[1:]:
+        if line[:1] in ("", " ", "\t"):
+            continue
+        head = re.split(r"[.\[\s]", line, maxsplit=1)[0]
+        if head in _ARGUMENT_SHAPES and head not in names:
+            names.append(head)
+    return names
+
+
+def _argument_type_error(names: list) -> dict:
+    fields = {n: _ARGUMENT_SHAPES[n] for n in names}
+    return actionable_error(
+        "One or more arguments have the wrong type" + (": " + ", ".join(names) if names else "") + ". "
+        "Nothing was scored, and your values are not repeated here.",
+        hint="Send each argument in the form shown under expected and call again; get_trace_schema lists all fields.",
+        reason="invalid_argument_type",
+        expected=fields or {k: _ARGUMENT_SHAPES[k] for k in ("goal", "trace", "outcome")},
+    )
+
+
+
 def _install_unknown_tool_hint() -> None:
     """Turn an unknown tools/call into a short hint listing valid tools (and a did-you-mean)."""
     original = mcp.call_tool
@@ -1969,6 +2093,10 @@ def _install_unknown_tool_hint() -> None:
         try:
             return await original(name, arguments, context)
         except ToolError as exc:
+            if _is_argument_validation_error(str(exc)):
+                bad = _invalid_argument_names(str(exc), name)
+                log_miss("invalid_argument_type", tool=str(name)[:40])
+                raise ToolError(json.dumps(_argument_type_error(bad))) from None
             if "Unknown tool" not in str(exc):
                 raise
             known = [info.name for info in mcp._tool_manager.list_tools()]

@@ -58,7 +58,7 @@ If your brief gives you a list of checks, a scope or open blockers, send them as
  "agent_name": "my-coordinator"}
 ```
 
-Here `security_scan` has no verify step, so the answer contains `"checks": {"coverage": "4/5", "missing": ["security_scan"], ...}`, the issues `expected_check_missing` and `success_with_open_checks`, and the fix "Report partial, not success, and name the checks that are still open: security_scan." Send `"outcome": "partial"` with `"open_blockers": ["security_scan"]` and the check counts as honestly reported open. Ids only: lowercase letters, digits and `_ . : / -`, max 40 characters; anything else is ignored with a note.
+Here `security_scan` has no verify step, so the answer contains `"checks": {"coverage": "4/5", "missing": ["security_scan"], ...}`, the issues `expected_check_missing` and `success_with_open_checks`, and the fix "Report partial, not success, and name the checks that are still open: security_scan." Send `"outcome": "partial"` with `"open_blockers": ["security_scan"]` and the check counts as honestly reported open. Ids only: lowercase letters, digits and `_ . : / -`, max 40 characters. Capitals and spaces are normalized (`Unit Tests` becomes `unit_tests`) and the note names the position of each item it changed; anything else is ignored with a note that names the position, never the value. If a delegate or sub-agent ran a check, record its result yourself as `verify:<check> passed` (with `verify_kind` `human` or `end_to_end`) once you have seen it: delegating alone is not a verification.
 
 ## What comes back
 

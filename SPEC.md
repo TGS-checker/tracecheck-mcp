@@ -20,7 +20,7 @@ The hosted service uses a private, calibrated scoring configuration; scores are 
 | `in_scope` | list of tool ids (max 30) | no | Since 0.5.5. The only tools you were allowed to use. |
 | `open_blockers` | integer 0-1000 or list of ids (max 30) | no | Since 0.5.5. What is still blocked at hand-over. |
 
-Ids in these four fields: lowercase `[a-z0-9_.:/-]`, starting with a letter or digit, max 40 characters. A comma-separated string is accepted. Other values are ignored with a line in `notes[]`; they are never echoed or logged. Only counts are logged (`context` in the data policy).
+Ids in these four fields: lowercase `[a-z0-9_.:/-]`, starting with a letter or digit, max 40 characters. A comma-separated string is accepted. Capitals and spaces are normalized (`Unit Tests` becomes `unit_tests`) and a line in `notes[]` names the items it changed, by position. Other values, including items that are not strings, are ignored with a line in `notes[]` that names the position, never the value. If no item is usable the note says so and the field is not applied. Values are never echoed or logged. Use the same form in your verify steps and tool ids: they are normalized the same way. Only counts are logged (`context` in the data policy).
 
 Step object: `{type, tool?, status?, label?, target_hash?, stakes?, verify_kind?, requirement_lowered?, check?}` (`check`: verify steps only, since 0.5.5; without it the verify step's `tool` is the check id)
 
@@ -130,7 +130,7 @@ A free-text trace is also accepted, but not recommended. Input may be in any lan
 
 Every error body has `error` (what went wrong), `hint` (what to do), `example` (a working call), `docs` and a stable `reason`:
 `unknown_path`, `method_not_allowed`, `not_acceptable`, `unsupported_media_type`, `missing_session`, `session_not_found`,
-`invalid_json`, `bad_request`, `unknown_tool`, `missing_fields`, `malformed_input`, `input_too_large`, `body_too_large`,
+`invalid_json`, `bad_request`, `unknown_tool`, `missing_fields`, `malformed_input`, `invalid_argument_type` (since 0.5.6: names the argument, never repeats what was sent), `input_too_large`, `body_too_large`,
 `rate_limited`, `task_not_found`, `invalid_request`, `method_not_found`, `parse_error`, `asset_not_found`.
 JSON-RPC numeric codes (`-32700`, `-32600`, `-32601`, `-32001`) stay protocol codes; the `reason` is in `error.data`.
 
