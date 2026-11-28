@@ -63,4 +63,4 @@ or report "partial") before you answer the user.
 
 Tip: set one stable `agent_name` per agent (e.g. `"support-agent"`) so you can compare scores between runs.
 
-Status: **verified against the docs linked above** (openai-agents itself was not installed for this check). The underlying MCP calls were tested live; see [self-check.md](../self-check.md).
+Status: Option B (`MCPServerStreamableHttp`) was **run against the live endpoint on 2026-11-28** (`openai-agents` 0.26.0): tools listed, `evaluate_trace` returned a score (called directly, without an LLM). Option A (`HostedMCPTool`) is **verified against the docs only**. See [self-check.md](../self-check.md).

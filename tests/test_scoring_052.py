@@ -143,7 +143,7 @@ def test_new_code_scores_with_an_old_config_without_errors(monkeypatch):
 def test_fallback_has_the_new_key_and_versions_agree():
     assert "obs_verify_kind_bonus" in FALLBACK["steps"]
     root = pathlib.Path(__file__).resolve().parent.parent
-    assert server.VERSION == server.SCORING_VERSION == "0.5.3"
+    assert server.VERSION == "0.5.4" and server.SCORING_VERSION == "0.5.3"
     assert f'version = "{server.VERSION}"' in (root / "pyproject.toml").read_text()
 
 

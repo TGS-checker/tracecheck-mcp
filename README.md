@@ -145,9 +145,16 @@ A2A: send the same object as a `data` part: `{"message":{"role":"ROLE_USER","mes
 Content fields are optional; prefer step types only.
 
 ## Privacy: what is logged
-Since v0.4 TraceCheck stores **no content**: no goal, trace or outcome text, and no tool names. Each call writes one line (to `calls.jsonl` and, in HTTP mode, `TRACECHECK_CALL {json}` to stdout / Render logs) with only:
-`timestamp, version, agent_name, score, dimensions, issue_count, trace_length` (characters, or number of steps), `privacy_mode, client_name, client_version, transport, user_agent, ip_hash`.
-`agent_name` is whatever you choose to send (optional). The IP is never stored, only `sha256(TRACECHECK_IP_SALT:ip)[:16]`. Scoring is deterministic and offline: your input is not sent anywhere else.
+TraceCheck stores **nothing** and logs **codes and counts only**: no goal, trace or outcome text, no tool names, no raw IP. Each call writes one line (to `calls.jsonl` and, in HTTP mode, `TRACECHECK_CALL {json}` to stdout / Render logs). The exact line, every field and what it means are in [docs/data-policy.md](docs/data-policy.md).
+A step can only carry identifiers: in `tool`, `status` and `label` anything that is not an identifier is replaced by a short hash token before scoring. `agent_name` is logged only when it looks like an identifier. Scoring is deterministic and offline: your input is not sent anywhere else. Each result carries a `privacy` block that says the same in one line.
+
+## What's new in v0.5.4
+
+- Easier to find and to trust: an MCP server card at `/mcp/server-card` and an AI catalog at `/.well-known/ai-catalog.json`.
+- A data policy with the exact log line: [docs/data-policy.md](docs/data-policy.md). Results carry a short `privacy` block.
+- Strict step shape: steps carry identifiers only; `get_trace_schema` describes it under `step_schema`.
+- Counts of discovery and usage steps (counts only, no content, no addresses).
+- Scoring is unchanged: `scoring_version` stays 0.5.3, so scores remain comparable with 0.5.3.
 
 ## What's new in v0.5.3
 

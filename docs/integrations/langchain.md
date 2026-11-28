@@ -66,4 +66,34 @@ report = await check.ainvoke({
 })
 ```
 
-Status: **verified against the docs linked above** (LangChain itself was not installed for this check). The underlying MCP calls were tested live; see [self-check.md](../self-check.md).
+## LangGraph: a self-check node without an LLM
+
+```python
+# pip install langchain-mcp-adapters langgraph
+import json
+from typing import TypedDict
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langgraph.graph import StateGraph, END
+
+class State(TypedDict):
+    steps: str      # e.g. "action:search ok > error > retry > verify passed > final"
+    report: dict
+
+client = MultiServerMCPClient({"tracecheck": {"transport": "streamable_http", "url": "https://tracecheck-mcp.onrender.com/mcp"}})
+tools = await client.get_tools()
+check = next(t for t in tools if t.name.endswith("evaluate_trace"))
+
+async def self_check(state: State):
+    raw = await check.ainvoke({"goal": "data lookup", "trace": state["steps"], "outcome": "success", "agent_name": "my-langgraph-agent"})
+    if isinstance(raw, list):
+        raw = raw[0]["text"] if isinstance(raw[0], dict) else raw[0]
+    return {"report": json.loads(raw)}
+
+g = StateGraph(State)
+g.add_node("self_check", self_check)
+g.set_entry_point("self_check")
+g.add_edge("self_check", END)
+result = await g.compile().ainvoke({"steps": "action:search ok > error > retry > verify passed > final", "report": {}})
+```
+
+Status: Option B and the LangGraph node above were **run against the live endpoint on 2026-11-28** (`langchain-mcp-adapters` 0.3.2, `langgraph` 1.2.24): tools listed, `evaluate_trace` returned a score. Option A (`langchain.mcp`) is **verified against the docs only**. See [self-check.md](../self-check.md).

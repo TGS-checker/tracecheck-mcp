@@ -1,6 +1,6 @@
 # TraceCheck trace format and response spec — v1
 
-Status: v1.3, published with service 0.5.3 (scoring_version 0.5.3). Open spec: anyone may produce or consume this format.
+Status: v1.4, published with service 0.5.4 (scoring_version 0.5.3). Open spec: anyone may produce or consume this format.
 This spec describes **what** goes in and comes out. It does not describe how scores are computed.
 The hosted service uses a private, calibrated scoring configuration; scores are comparable only within the same `scoring_version` on the hosted service. Issue codes, fix ids and the response shape are the contract and do not depend on the configuration.
 
@@ -20,7 +20,8 @@ Step object: `{type, tool?, status?, label?, target_hash?, stakes?, verify_kind?
 
 - `type`: `action`, `observe`, `error`, `retry`, `fallback`, `verify`, `final`, `handoff` (since 0.5.1: work or a decision handed to a person or another agent, such as an approval request or escalation).
 - `status`: `ok`, `partial`, `empty`, `error`/`failed`/`timeout`, `passed`.
-- `label` / `target_hash` (optional): helps relate steps that target the same thing.
+- `label` / `target_hash` (optional): helps relate steps that target the same thing. It is only compared for equality and reduced to a hash.
+- `tool` and `status` (optional) are identifiers: lowercase `[a-z0-9_.:/-]`, up to 60 and 30 characters. Other text is replaced by a short hash token (since 0.5.4); other step fields are ignored.
 - `stakes` (optional): `low`, `normal`, `high`.
 - `verify_kind` (optional, on `verify`): `api`, `script`, `visual`, `human`, `end_to_end`, `test`.
 - `requirement_lowered` (optional, on `fallback`): `true` when the fallback dropped or replaced a requirement of the goal.
@@ -49,6 +50,7 @@ A free-text trace is also accepted, but not recommended. Input may be in any lan
 | `rating_request` | One line asking for an optional `previous_rating` on your next call. |
 | `notes[]` | Optional fields that were ignored, with what to send instead. |
 | `summary`, `privacy_mode`, `version`, `scoring_version` | As named. |
+| `privacy` | `{stored, logged, policy}`: what the service keeps (nothing stored; codes and counts logged) and a link to the data policy. Since 0.5.4. |
 
 `confidence`: `low`, `medium` or `high`, based on `n`.
 

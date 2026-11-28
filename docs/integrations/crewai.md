@@ -55,4 +55,4 @@ or report "partial") before you answer the user.
 
 Tip: use one stable `agent_name` per crew role (e.g. `"crew-researcher"`) so you can compare scores between runs.
 
-Status: **verified against the docs linked above** (CrewAI itself was not installed for this check). The underlying MCP calls were tested live; see [self-check.md](../self-check.md).
+Status: Option B (`MCPServerAdapter`) was **run against the live endpoint on 2026-11-28** (`crewai-tools` 1.6.1): tools listed, `evaluate_trace` returned a score. Option A (`mcps=[...]`) is **verified against the docs only**. See [self-check.md](../self-check.md).

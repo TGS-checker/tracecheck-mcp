@@ -136,9 +136,9 @@ def test_locked_gap_zero_scores_hold():
 
 def test_versions_are_0_5_3():
     root = pathlib.Path(__file__).resolve().parent.parent
-    assert server.VERSION == server.SCORING_VERSION == "0.5.3"
-    assert json.loads((root / "server.json").read_text())["version"] == "0.5.3"
-    assert json.loads((root / "agent-card.json").read_text())["version"] == "0.5.3"
+    assert server.VERSION == "0.5.4" and server.SCORING_VERSION == "0.5.3"
+    assert json.loads((root / "server.json").read_text())["version"] == "0.5.4"
+    assert json.loads((root / "agent-card.json").read_text())["version"] == "0.5.4"
     assert f'version = "{server.VERSION}"' in (root / "pyproject.toml").read_text()
 
 

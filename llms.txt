@@ -78,8 +78,14 @@ Content fields are optional; prefer the privacy-light example above (step types 
 ## Terms
 
 - Free during the test phase, no API key, no auth.
-- Privacy: no goal, trace or outcome text is logged or stored; only the score and counts.
+- Privacy: nothing is stored; only codes and counts are logged, never goal, trace or outcome text. Exact log line and fields: https://github.com/TGS-checker/tracecheck-mcp/blob/main/docs/data-policy.md
 - Always-on host: no cold start, calls answer right away.
+
+## Discovery
+
+- MCP server card: https://tracecheck-mcp.onrender.com/mcp/server-card
+- AI catalog: https://tracecheck-mcp.onrender.com/.well-known/ai-catalog.json
+- A2A agent card: https://tracecheck-mcp.onrender.com/.well-known/agent-card.json
 
 ## Docs
 

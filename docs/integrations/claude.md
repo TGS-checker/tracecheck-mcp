@@ -51,4 +51,4 @@ or report "partial") before you answer the user.
 
 Suggested `agent_name`: `"claude-code"`, `"claude-desktop"` or `"cursor-agent"` plus your project name.
 
-Status: Claude Code config **verified against the docs linked above**; the Cursor and mcp-remote configs are the same ones in the README. The underlying MCP calls were tested live; see [self-check.md](../self-check.md).
+Status: the endpoint was **run live on 2026-11-28** with a plain MCP client (initialize, list tools, call `evaluate_trace`). The `claude mcp add` command and the Cursor and Claude Desktop configs are **verified against the docs only** (those apps were not run). See [self-check.md](../self-check.md).

@@ -24,7 +24,7 @@ def test_tool_descriptions_and_instructions():
 
 
 def test_public_files():
-    for name in ["README.md", "llms.txt", "agent-card.json", "server.json", "docs/self-check.md", "SPEC.md", "ARCHITECTURE.md", "SECURITY.md", "docs/integrations/claude.md", "docs/integrations/langchain.md", "docs/integrations/openai-agents.md", "docs/integrations/crewai.md", "pyproject.toml"]:
+    for name in ["README.md", "llms.txt", "agent-card.json", "server.json", "docs/self-check.md", "SPEC.md", "ARCHITECTURE.md", "SECURITY.md", "docs/integrations/claude.md", "docs/integrations/langchain.md", "docs/integrations/openai-agents.md", "docs/integrations/crewai.md", "docs/data-policy.md", "docs/first-call.md", "pyproject.toml"]:
         _check((ROOT / name).read_text(), name)
 
 

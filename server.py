@@ -3,6 +3,8 @@ TraceCheck MCP Server
 A minimal agent-first service for independent evaluation of agent execution traces.
 Helps agents improve their own processes by providing objective feedback.
 
+v0.5.4: trust and discovery, scoring unchanged (SCORING_VERSION stays 0.5.3): MCP server card, AI catalog,
+content-free stage counters, strict step shape (identifiers only), privacy block in results, agent_name log hygiene.
 v0.5.3: outcome-aware verification fix text, what_to_verify names a lowered requirement, verify-before-handoff
 as preferred order, expired previous_need_id explained in progress (requested_previous_need_id).
 v0.5.2: error_recovery is null (not 100) in dimensions/summary when not applicable, with the reason; progress compares
@@ -41,12 +43,15 @@ Other additions:
 from mcp.server import MCPServer  # mcp SDK >= 2.x (MCPServer replaced FastMCP)
 from mcp.server.mcpserver import Context
 from mcp.server.mcpserver.exceptions import ToolError
+import atexit
 import hashlib
 import json
 import logging
 import os
 import re
 import sys
+import threading
+import time
 import uuid
 from typing import Annotated
 from datetime import datetime, timezone
@@ -63,8 +68,8 @@ except OSError:  # e.g. installed via uvx/pip on a machine without /workspace
     LOG_FILE = Path.home() / ".tracecheck" / "calls.jsonl"
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-VERSION = "0.5.3"
-SCORING_VERSION = "0.5.3"  # POD retest-052: outcome-aware fixes, lowered-requirement check, need_id expiry note, open-data calibration
+VERSION = "0.5.4"
+SCORING_VERSION = "0.5.3"  # unchanged in 0.5.4 (scores stay comparable); POD retest-052: outcome-aware fixes, lowered-requirement check, need_id expiry note
 # stdout carries JSON-RPC in stdio mode, so call lines go to stdout only in HTTP mode (set in main()).
 _CALL_STREAM = sys.stderr
 
@@ -162,6 +167,13 @@ _W, _CAPS, _EFF, _ST, _TX = SC["weights"], SC["caps"], SC["efficiency"], SC["ste
 
 REPO_URL = "https://github.com/TGS-checker/tracecheck-mcp"
 LIVE_URL = "https://tracecheck-mcp.onrender.com"
+DATA_POLICY_URL = f"{REPO_URL}/blob/main/docs/data-policy.md"
+# MCP Server Card (SEP-2127): the description is limited to 100 characters by the card schema.
+SERVER_CARD_DESCRIPTION = "Independent, fast check of an agent's run: objective score and fixes. No content sent."
+SERVER_CARD_SCHEMA_URL = "https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json"
+SERVER_CARD_MEDIA_TYPE = "application/mcp-server-card+json"
+AI_CATALOG_MEDIA_TYPE = "application/ai-catalog+json"
+AI_CATALOG_SPEC_VERSION = "0.9"  # ai-catalog.io release candidate; the final spec will say 1.0
 
 # Actionable, machine-readable help returned on wrong or rejected calls (host principle).
 # Use-case signposts: only proven, live cases. Single source; docs/use-cases.md must match (tested).
@@ -308,6 +320,17 @@ TRACE_SCHEMA = {
         "outcome": "a status: 'success', 'partial' or 'failed' (optionally a category)",
         "example_call": _PRIVACY_LIGHT_EXAMPLE,
         "example_compact_trace": _PRIVACY_LIGHT_COMPACT,
+    },
+    "step_schema": {
+        "note": "A step can only carry identifiers, never text. Anything else is ignored or replaced by a short hash token.",
+        "type": "one of: action, observe, error, retry, fallback, verify, final, handoff",
+        "tool": "optional identifier, lowercase [a-z0-9_.:/-], up to 60 characters. Other text is replaced by a hash token.",
+        "status": "optional identifier, lowercase [a-z0-9_.:/-], up to 30 characters (e.g. ok, partial, empty, error, passed). "
+                  "Other text is replaced by a hash token.",
+        "label": "optional. Only compared for equality between steps, then reduced to a hash. Never returned or logged.",
+        "stakes": "optional: low | normal | high",
+        "verify_kind": "optional: api | script | visual | human | end_to_end | test",
+        "other_fields": "ignored",
     },
     "content_fields": "Optional. Prefer step types only; free-text content is not required.",
     "returned_fields": {
@@ -867,6 +890,23 @@ def _flag(issues: list, fixes: list, code: str, fix_id: str | None = None, **att
         fixes.append(fid)
 
 
+_IDENT_RE = re.compile(r"^[a-z0-9_.:/\-]+$")
+
+
+def _hash_token(prefix: str, value: str) -> str:
+    return prefix + hashlib.sha256(value.encode("utf-8", "replace")).hexdigest()[:8]
+
+
+def _ident(value, prefix: str, maxlen: int) -> str:
+    """Strict step field: an identifier stays as it is; anything else becomes a short hash token, so the same
+    text still compares equal across steps but cannot carry content any further."""
+    text = str(value).strip().lower().replace(" ", "_")
+    cut = text[:maxlen]
+    if cut and len(text) <= maxlen and _IDENT_RE.match(cut):
+        return cut
+    return _hash_token(prefix, text)
+
+
 def _parse_steps(trace) -> list | None:
     """Return a list of {type, tool, status} if `trace` is in the privacy-light format, else None."""
     if isinstance(trace, str):
@@ -904,9 +944,9 @@ def _parse_steps(trace) -> list | None:
         status = st.get("status")
         evidence = st.get("label") or st.get("target_hash") or st.get("targetHash")
         evidence = str(evidence).strip()[:80] if evidence else None
-        step = {"type": typ, "tool": str(tool).strip().lower()[:60] if tool else None,
-                "status": str(status).strip().lower().replace(" ", "_")[:30] if status is not None else None,
-                "label": evidence or None}
+        step = {"type": typ, "tool": _ident(tool, "t_", 60) if tool else None,
+                "status": _ident(status, "s_", 30) if status is not None else None,
+                "label": _hash_token("l_", evidence) if evidence else None}
         stakes = str(st.get("stakes") or "").strip().lower()
         if stakes in ("low", "normal", "high"):
             step["stakes"] = stakes
@@ -1467,6 +1507,8 @@ def _finish(dimensions: dict, issues: list, suggestions: list, caps: list, priva
         "dimensions": shown,
         **({"not_applicable": not_applicable, "not_applicable_reason": na_reasons} if not_applicable else {}),
         "privacy_mode": privacy_mode,
+        "privacy": {"stored": "nothing", "logged": "codes and counts only, never goal, trace or outcome text",
+                    "policy": DATA_POLICY_URL},
         "version": VERSION,
         "scoring_version": SCORING_VERSION,
     }
@@ -1491,6 +1533,15 @@ def agent_kind(agent_name: str | None, user_agent: str | None) -> str:
     if any(m in ua for m in _CRAWLER_MARKERS) and not n:
         return "crawler"
     return "agent" if (n and n != "unknown") or ua else "unknown"
+
+
+_LOG_NAME_RE = re.compile(r"^[A-Za-z0-9._:@/-]{1,64}$")
+
+
+def _log_agent_name(name) -> str:
+    """agent_name is free text sent by the caller. Only identifier-like names are logged as they are."""
+    text = str(name or "unknown").strip()
+    return text if _LOG_NAME_RE.match(text) else "other"
 
 
 def _step_shape(trace) -> dict:
@@ -1524,7 +1575,7 @@ def record_call(trace, agent_name: str, result: dict, client: dict | None = None
         "agent_id": extra.get("agent_id"),
         "agent_id_source": extra.get("agent_id_source"),
         "agent_kind": agent_kind(agent_name, client.get("user_agent")),
-        "agent_name": str(agent_name)[:80],
+        "agent_name": _log_agent_name(agent_name),
         "client_family": client_family(client.get("user_agent"), client.get("client_name")),
         "goal_category": extra.get("goal_category"),
         **_step_shape(trace),
@@ -1554,6 +1605,7 @@ def record_call(trace, agent_name: str, result: dict, client: dict | None = None
         logger.warning(f"could not write call log: {e}")
     print("TRACECHECK_CALL " + json.dumps(entry, ensure_ascii=False), file=_CALL_STREAM, flush=True)
     logger.info(f"Evaluated trace: agent_id={entry['agent_id']} score={result['score']}")
+    count_stage("evaluate_trace", client.get("user_agent"), client.get("client_name"), who=client.get("ip_hash"))
 
 
 
@@ -1564,6 +1616,103 @@ def log_miss(reason: str, *, path: str | None = None, method: str | None = None,
              "server_version": VERSION, "scoring_version": SCORING_VERSION, "reason": reason,
              "path": path, "method": method, "tool": tool, "client_family": client_family(user_agent)}
     print("TRACECHECK_MISS " + json.dumps({k: v for k, v in entry.items() if v is not None}), file=_CALL_STREAM, flush=True)
+
+
+# --- 0.5.4 stage counters: counts only, no content, no IP, no per-request lines ----------------------
+# One TRACECHECK_STAGE line per (day, stage, client family, kind) every few minutes, with the number of events since
+# the last flush (n) and the number of distinct visitors that day (u_day). Visitors are told apart by a hash that
+# rotates daily and only lives in memory; it is never logged or stored.
+STAGES = ("root", "llms", "robots", "health", "a2a_card", "server_card", "ai_catalog", "docs", "a2a_post",
+          "mcp_initialize", "mcp_tools_list", "mcp_tools_call", "mcp_other", "evaluate_trace", "miss", "other")
+_STAGE_PATHS = {
+    "/": "root", "/llms.txt": "llms", "/robots.txt": "robots", "/health": "health",
+    "/.well-known/agent-card.json": "a2a_card", "/.well-known/agent.json": "a2a_card",
+    "/mcp/server-card": "server_card", "/.well-known/mcp.json": "server_card",
+    "/.well-known/ai-catalog.json": "ai_catalog",
+}
+_MCP_METHOD_STAGES = {"initialize": "mcp_initialize", "tools/list": "mcp_tools_list", "tools/call": "mcp_tools_call"}
+STAGE_FLUSH_SECONDS = 300
+_STAGE_MAX_KEYS = 400
+_STAGE_MAX_VISITORS = 500
+_STAGE_LOCK = threading.Lock()
+_STAGE_STATE: dict = {"day": None, "delta": {}, "visitors": {}, "last_flush": time.monotonic()}
+
+
+def _stage_kind(user_agent: str | None) -> str:
+    ua = (user_agent or "").lower()
+    if any(m in ua for m in _OWN_TEST_MARKERS):
+        return "own_test"
+    if any(m in ua for m in _CRAWLER_MARKERS):
+        return "crawler"
+    return "client" if ua else "unknown"
+
+
+def count_stage(stage: str, user_agent: str | None = None, client_name: str | None = None, who: str | None = None) -> None:
+    """Count one funnel event. Never raises; never logs content."""
+    try:
+        stage = stage if stage in STAGES else "other"
+        now = datetime.now(timezone.utc)
+        day = now.strftime("%Y-%m-%d")
+        key_tail = (stage, client_family(user_agent, client_name), _stage_kind(user_agent))
+        due = False
+        with _STAGE_LOCK:
+            st = _STAGE_STATE
+            if st["day"] != day:
+                lines = _stage_drain_locked()
+                st["day"], st["visitors"] = day, {}
+                _stage_emit(lines)
+            key = (day,) + key_tail
+            if key not in st["delta"] and len(st["delta"]) >= _STAGE_MAX_KEYS:
+                key = (day, stage, "_other", key_tail[2])
+            st["delta"][key] = st["delta"].get(key, 0) + 1
+            if who:
+                seen = st["visitors"].setdefault(key, set())
+                if len(seen) < _STAGE_MAX_VISITORS:
+                    seen.add(hashlib.sha256(f"{day}:{who}:{user_agent or ''}".encode()).hexdigest()[:12])
+            due = time.monotonic() - st["last_flush"] >= STAGE_FLUSH_SECONDS
+        if due:
+            flush_stages()
+    except Exception:
+        logger.debug("stage count failed", exc_info=True)
+
+
+def _stage_drain_locked() -> list:
+    st = _STAGE_STATE
+    lines = [(k, n, len(st["visitors"].get(k, ()))) for k, n in st["delta"].items()]
+    st["delta"] = {}
+    st["last_flush"] = time.monotonic()
+    return lines
+
+
+def _stage_emit(lines: list) -> None:
+    ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    for (day, stage, family, kind), n, uniq in lines:
+        entry = {"event_type": "stage", "ts_utc": ts, "server_version": VERSION, "day": day, "stage": stage,
+                 "client_family": family, "kind": kind, "n": n, "u_day": uniq}
+        print("TRACECHECK_STAGE " + json.dumps(entry), file=_CALL_STREAM, flush=True)
+
+
+def flush_stages() -> int:
+    """Write the counters collected since the last flush. Returns the number of lines written."""
+    with _STAGE_LOCK:
+        lines = _stage_drain_locked()
+    _stage_emit(lines)
+    return len(lines)
+
+
+def _stage_flusher() -> None:
+    while True:
+        time.sleep(60)
+        try:
+            if time.monotonic() - _STAGE_STATE["last_flush"] >= STAGE_FLUSH_SECONDS:
+                flush_stages()
+        except Exception:
+            logger.debug("stage flush failed", exc_info=True)
+
+
+def start_stage_flusher() -> None:
+    threading.Thread(target=_stage_flusher, name="stage-flusher", daemon=True).start()
+    atexit.register(flush_stages)
 
 
 def _did_you_mean(name: str, known: list[str]) -> str | None:
@@ -1705,6 +1854,61 @@ async def mcp_well_known(request: Request):
         "documentation": f"{REPO_URL}#readme",
         "llms_txt": f"{base}/llms.txt",
     })
+
+
+def _server_card(base: str) -> dict:
+    """MCP Server Card (SEP-2127). Identity and transport only: the card does not list tools."""
+    return {
+        "$schema": SERVER_CARD_SCHEMA_URL,
+        "name": "io.github.TGS-checker/tracecheck",
+        "title": "TraceCheck",
+        "version": VERSION,
+        "description": SERVER_CARD_DESCRIPTION,
+        "websiteUrl": f"{REPO_URL}#readme",
+        "repository": {"source": "github", "url": REPO_URL},
+        "icons": [{"src": f"{base}/icon.png", "mimeType": "image/png", "sizes": ["256x256"]},
+                  {"src": f"{base}/icon.svg", "mimeType": "image/svg+xml", "sizes": ["any"]}],
+        "remotes": [{"type": "streamable-http", "url": f"{base}/mcp"}],
+    }
+
+
+def _ai_catalog(base: str) -> dict:
+    """AI Catalog (ai-catalog.io, release candidate): one entry per artifact, pointing to its native card."""
+    host = re.sub(r"^https?://", "", base).split("/")[0].lower()
+    return {
+        "specVersion": AI_CATALOG_SPEC_VERSION,
+        "entries": [
+            {"identifier": f"urn:air:{host}:tracecheck:mcp", "displayName": "TraceCheck (MCP)",
+             "type": SERVER_CARD_MEDIA_TYPE, "url": f"{base}/mcp/server-card",
+             "description": SERVER_CARD_DESCRIPTION, "tags": ["agents", "evaluation", "reliability"]},
+            {"identifier": f"urn:air:{host}:tracecheck:a2a", "displayName": "TraceCheck (A2A)",
+             "type": "application/a2a-agent-card+json", "url": f"{base}/.well-known/agent-card.json",
+             "description": SERVER_CARD_DESCRIPTION, "tags": ["agents", "evaluation", "reliability"]},
+        ],
+    }
+
+
+def _json_document(request: Request, doc: dict, media_type: str):
+    """Static discovery document: media type, ETag with 304, public cache, CORS for browsers and scanners."""
+    from starlette.responses import Response
+    raw = json.dumps(doc, ensure_ascii=False, sort_keys=True).encode()
+    etag = '"' + hashlib.sha256(raw).hexdigest()[:20] + '"'
+    headers = {"ETag": etag, "Cache-Control": "public, max-age=3600", "Access-Control-Allow-Origin": "*",
+               "Access-Control-Allow-Methods": "GET, HEAD", "Access-Control-Allow-Headers": "Content-Type, If-None-Match",
+               "Access-Control-Expose-Headers": "ETag", "Vary": "Accept-Encoding"}
+    if etag in [t.strip() for t in (request.headers.get("if-none-match") or "").split(",")]:
+        return Response(status_code=304, headers=headers)
+    return Response(raw if request.method != "HEAD" else b"", media_type=media_type, headers=headers)
+
+
+@mcp.custom_route("/mcp/server-card", methods=["GET", "HEAD"])
+async def server_card(request: Request):
+    return _json_document(request, _server_card(_public_base(request)), SERVER_CARD_MEDIA_TYPE)
+
+
+@mcp.custom_route("/.well-known/ai-catalog.json", methods=["GET", "HEAD"])
+async def ai_catalog(request: Request):
+    return _json_document(request, _ai_catalog(_public_base(request)), AI_CATALOG_MEDIA_TYPE)
 
 
 @mcp.custom_route("/robots.txt", methods=["GET"])
@@ -2208,6 +2412,8 @@ class McpGetHelp:
 
 def _is_mcp_endpoint(path: str) -> bool:
     """True only for /mcp and /mcp/..., not lookalikes such as /mcpx."""
+    if path == "/mcp/server-card":  # a static discovery document, not the MCP endpoint
+        return False
     return path == "/mcp" or path.startswith("/mcp/")
 
 
@@ -2261,6 +2467,55 @@ class McpRejectLogger:
         await self.app(scope, receive, wrapper)
 
 
+def _stage_who(scope) -> str | None:
+    """Raw visitor key for the in-memory daily hash. Never logged."""
+    headers = dict(scope.get("headers", []))
+    ip = (headers.get(b"x-forwarded-for", b"").decode("latin-1").split(",")[0].strip()
+          or ((scope.get("client") or ("",))[0] or ""))
+    return ip or None
+
+
+class StageCounter:
+    """Pure-ASGI middleware (outermost): counts discovery fetches and unknown paths. Counts only."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "lifespan":
+            async def lifespan_receive():
+                message = await receive()
+                if message.get("type") == "lifespan.shutdown":
+                    flush_stages()  # a deploy sends SIGTERM and uvicorn exits without running atexit hooks
+                return message
+            return await self.app(scope, lifespan_receive, send)
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        path, method = scope.get("path", ""), scope.get("method")
+        ua = next((v.decode("latin-1") for k, v in scope.get("headers", []) if k == b"user-agent"), "")
+        counted = False
+
+        async def wrapper(message):
+            nonlocal counted
+            if message["type"] == "http.response.start" and not counted:
+                counted = True
+                status = message.get("status", 0)
+                stage = None
+                if method in ("GET", "HEAD"):
+                    stage = _STAGE_PATHS.get(path)
+                    if stage is None and path.startswith(("/docs", "/assets", "/icon")):
+                        stage = "docs"
+                    if status == 404 or (stage is None and status >= 400 and status != 405):
+                        stage = "miss"
+                elif method == "POST" and (path == "/a2a" or path.startswith("/a2a/")):
+                    stage = "a2a_post"
+                if stage:
+                    count_stage(stage, ua, None, who=_stage_who(scope))
+            await send(message)
+
+        await self.app(scope, receive, wrapper)
+
+
 class ClientInfoSniffer:
     """Pure-ASGI middleware: peeks at POST /mcp JSON bodies for clientInfo, then replays the body unchanged."""
 
@@ -2279,7 +2534,14 @@ class ClientInfoSniffer:
         try:
             payload = json.loads(body) if body else None
             msgs = payload if isinstance(payload, list) else [payload]
+            _ua = None
             for m in msgs:
+                if isinstance(m, dict):
+                    method = m.get("method")
+                    if _ua is None:
+                        _ua = next((v.decode("latin-1") for k, v in scope.get("headers", []) if k == b"user-agent"), "")
+                    count_stage(_MCP_METHOD_STAGES.get(method, "mcp_other") if isinstance(method, str) else "mcp_other",
+                                _ua, None, who=_stage_who(scope))
                 params = (m or {}).get("params") or {}
                 info = params.get("clientInfo") or (params.get("_meta") or {}).get("io.modelcontextprotocol/clientInfo")
                 if isinstance(info, dict):
@@ -2361,11 +2623,12 @@ def build_http_app():
                                          allowed_origins=["http://127.0.0.1:*", "http://localhost:*"])
     app = mcp.streamable_http_app(stateless_http=True, json_response=True, host=host, transport_security=security)
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET", "HEAD", "POST", "DELETE", "OPTIONS"],
-                       allow_headers=["*"], expose_headers=["mcp-session-id", "mcp-protocol-version"])
+                       allow_headers=["*"], expose_headers=["mcp-session-id", "mcp-protocol-version", "etag"])
     app.add_middleware(ClientInfoSniffer)
     app.add_middleware(McpRejectLogger)
     app.add_middleware(McpGetHelp)
     app.add_middleware(BodyLimitAndGlobalRate)
+    app.add_middleware(StageCounter)
     from starlette.exceptions import HTTPException
 
     async def _http_exception_handler(request, exc):
@@ -2396,6 +2659,7 @@ def main() -> None:
         _CALL_STREAM = sys.stdout
         import uvicorn
         app, host = build_http_app()
+        start_stage_flusher()
         port = int(os.environ.get("PORT", "8000"))
         uvicorn.run(app, host=host, port=port)
     else:
